@@ -411,6 +411,40 @@ input:focus, select:focus, textarea:focus{border-color:var(--accent); outline:no
   <section class="panel" id="panel-manage" role="tabpanel" aria-labelledby="tab-manage" hidden>
     <div class="manage-grid" id="book-settings"></div>
 
+    <div class="card" id="pp-card">
+      <div class="sec-head"><h2>Import from PrizePicks</h2><span class="hint">Paste your entry history &mdash; there&rsquo;s nothing to fetch</span></div>
+      <p class="help" style="margin:0 0 12px">PrizePicks keeps entry history behind your login and publishes no per-account API, so there&rsquo;s no address to point at the way Polymarket has. Paste it instead, in whichever of these you can get.</p>
+      <div class="radio-row" id="pp-mode" style="margin-bottom:12px">
+        <label><input type="radio" name="ppmode" value="table" checked>Spreadsheet or CSV</label>
+        <label><input type="radio" name="ppmode" value="json">Entries JSON</label>
+      </div>
+
+      <div id="pp-help-table">
+        <p class="help" style="margin:0 0 8px">Copy straight out of Excel, Numbers or Google Sheets &mdash; tabs, commas and semicolons all parse. A header row is detected and matched on names, so column order doesn&rsquo;t matter; without one, the order below is assumed.</p>
+        <div class="tablewrap" style="margin-bottom:9px"><table style="min-width:520px; font-size:12px"><thead><tr>
+          <th>date</th><th>bet</th><th>stake</th><th>multiplier</th><th>result</th><th>returned</th><th>note</th>
+        </tr></thead><tbody>
+          <tr><td class="num">2026-09-14</td><td>Power Play 2&times; &mdash; Bedard 2+ SOG</td><td class="num">25</td><td class="num">3</td><td>win</td><td class="num"></td><td></td></tr>
+          <tr><td class="num">2026-09-09</td><td>Flex Play 6&times; &mdash; Sunday slate</td><td class="num">20</td><td class="num">25</td><td>loss</td><td class="num"></td><td></td></tr>
+          <tr><td class="num">2026-09-04</td><td>Flex Play 4&times; &mdash; Judge 1+ HR</td><td class="num">20</td><td class="num">6</td><td>partial</td><td class="num">30</td><td>3 of 4 hit</td></tr>
+        </tbody></table></div>
+        <p class="help" style="margin:0 0 10px"><b>returned</b> is only needed for a flex play that part-hits &mdash; leave it blank otherwise. <b>result</b> accepts win / loss / push / partial / pending and the obvious synonyms; leave it blank and it&rsquo;s inferred from what came back. <b>multiplier</b> takes 3, 3x or American odds like +150.</p>
+        <button class="btn btn-sm js-pp-template" type="button">Copy the template</button>
+      </div>
+
+      <div id="pp-help-json" hidden>
+        <p class="help" style="margin:0 0 10px">Log in to PrizePicks in a desktop browser, open your entry history, and in DevTools &rarr; Network click the request that returns it &mdash; <b>Copy &rarr; Copy response</b> &mdash; then paste it here. Nothing leaves this page, and you never handle a token: your browser is already signed in.<br><br>Stakes, multipliers, results and dates come across. Pick-level detail varies by payload, so an entry may land as its type and pick count &mdash; rename any of them afterwards like a hand-logged bet.</p>
+      </div>
+
+      <div class="field" style="margin-top:13px">
+        <label for="pp-text">Paste here</label>
+        <textarea id="pp-text" spellcheck="false" style="min-height:130px; font-family:'IBM Plex Mono', monospace; font-size:11.5px" placeholder="date,bet,stake,multiplier,result&#10;2026-09-14,Power Play 2x - Bedard 2+ SOG,25,3,win"></textarea>
+      </div>
+      <p class="help" id="pp-status" style="margin-top:7px">Set the PrizePicks starting bankroll above first &mdash; imported bets are sized in units against it.</p>
+      <button class="btn btn-sm btn-primary" id="pp-parse" type="button" style="margin-top:10px">Read this</button>
+      <div id="pp-preview" hidden style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px"></div>
+    </div>
+
     <div class="card" id="pm-card">
       <div class="sec-head"><h2>Import from Polymarket</h2><span class="hint">Reads your public trade history and turns each market into a bet</span></div>
       <div class="grid f2">
@@ -722,16 +756,16 @@ function stats(book){
 function money(n, opt){
   opt = opt || {};
   if(n === null || n === undefined || !isFinite(n)) return "–";
-  var neg = n < 0, a = Math.abs(n);
+  var neg = n < 0, a = Math.abs(n), zero = a < 0.005;
   var dec = opt.round ? 0 : 2;
   var s = a.toLocaleString("en-US", {minimumFractionDigits:dec, maximumFractionDigits:dec});
-  var sign = neg ? "−" : (opt.signed ? "+" : "");
+  var sign = zero ? "" : neg ? "−" : (opt.signed ? "+" : "");
   return sign + "$" + s;
 }
 function units(n, opt){
   opt = opt || {};
   if(n === null || n === undefined || !isFinite(n)) return "–";
-  var sign = n < 0 ? "−" : (opt.signed ? "+" : "");
+  var sign = Math.abs(n) < 0.005 ? "" : n < 0 ? "−" : (opt.signed ? "+" : "");
   return sign + Math.abs(n).toFixed(2) + "u";
 }
 function pct(n){ return (n>0?"+":n<0?"−":"") + Math.abs(n).toFixed(1) + "%"; }
@@ -1402,12 +1436,314 @@ window.addEventListener("resize", function(){
 });
 
 /* =========================================================
+   PrizePicks import
+
+   PrizePicks has no public per-account API - entry history sits behind the
+   login - so both routes here are pastes: a spreadsheet of entries, or a raw
+   entries payload lifted from a logged-in browser.
+   ========================================================= */
+var PP_NOTE = "Imported from PrizePicks";
+var PP_TEMPLATE = "date\tbet\tstake\tmultiplier\tresult\treturned\tnote\n" +
+  "2026-09-14\tPower Play 2x - Bedard 2+ SOG / Kucherov 1+ pt\t25\t3\twin\t\t\n" +
+  "2026-09-09\tFlex Play 6x - Sunday slate\t20\t25\tloss\t\t\n" +
+  "2026-09-04\tFlex Play 4x - Judge 1+ HR combo\t20\t6\tpartial\t30\t3 of 4 hit\n" +
+  "2026-09-18\tFlex Play 4x - Monday night props\t25\t6\tpending\t\t\n";
+
+var PP_COLS = {
+  date:   ["date","placed","entry date","date placed","created","created at","day","time"],
+  desc:   ["bet","description","entry","picks","details","market","name","selection","legs description"],
+  stake:  ["stake","amount","entry fee","fee","wager","risk","cost","entry amount","bet amount","buy in"],
+  mult:   ["multiplier","mult","payout multiplier","odds","x","multi"],
+  ret:    ["returned","return","payout","won","amount won","winnings","actual payout","paid"],
+  result: ["result","status","outcome","won/lost","settled"],
+  type:   ["type","entry type","play type","game mode","mode"],
+  legs:   ["legs","picks","number of picks","pick count","num picks"],
+  note:   ["note","notes","comment","comments","memo"],
+  book:   ["book","sportsbook","site","account","platform"]
+};
+var PP_RESULTS = {
+  win:["win","won","w","hit","cash","cashed","winner","green"],
+  loss:["loss","lost","l","lose","miss","missed","loser","red","bust"],
+  push:["push","void","voided","refund","refunded","cancel","canceled","cancelled","tie","no action"],
+  partial:["partial","part","partly","flex","part hit","partial win"],
+  pending:["pending","open","live","unsettled","in progress","active","placed"]
+};
+function ppNum(v){
+  if(typeof v === "number") return isFinite(v) ? v : 0;
+  var t = String(v == null ? "" : v).replace(/[$,\s]/g, "").replace(/[\u00d7x]$/i, "");
+  var n = parseFloat(t);
+  return isFinite(n) ? n : 0;
+}
+function ppHas(v){ return String(v == null ? "" : v).trim() !== ""; }
+function ppDateOf(v){
+  var t = String(v == null ? "" : v).trim();
+  if(!t) return iso(new Date());
+  if(/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0,10);
+  var m = t.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+  if(m){
+    var y = +m[3]; if(y < 100) y += 2000;
+    var d = new Date(y, +m[1]-1, +m[2], 12);
+    if(isFinite(d.getTime())) return iso(d);
+  }
+  var n = Number(t);
+  if(isFinite(n) && n > 1e8) return pmDate(n);
+  var p = new Date(t);
+  return isFinite(p.getTime()) ? iso(p) : iso(new Date());
+}
+function ppResultOf(v){
+  var t = String(v == null ? "" : v).trim().toLowerCase();
+  if(!t) return null;               /* blank is unknown, and gets inferred from the money */
+  for(var k in PP_RESULTS){
+    if(PP_RESULTS[k].indexOf(t) > -1) return k;
+  }
+  return null;
+}
+function ppMultOf(v){
+  var t = String(v == null ? "" : v).trim();
+  if(!t) return 0;
+  if(/^[+-]\d{3,}$/.test(t)){                       /* american odds in the multiplier column */
+    var n = parseInt(t, 10);
+    return n >= 0 ? 1 + n/100 : 1 + 100/Math.abs(n);
+  }
+  return ppNum(t);
+}
+function ppHash(s){
+  var h = 2166136261;
+  for(var i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }
+  return h.toString(36);
+}
+function ppSplit(line, d){
+  var out = [], cur = "", q = false;
+  for(var i=0;i<line.length;i++){
+    var c = line.charAt(i);
+    if(q){
+      if(c === '"'){ if(line.charAt(i+1) === '"'){ cur += '"'; i++; } else q = false; }
+      else cur += c;
+    }else if(c === '"'){ q = true; }
+    else if(c === d){ out.push(cur); cur = ""; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out.map(function(x){ return x.trim(); });
+}
+function ppDelim(line){
+  var t = (line.match(/\t/g) || []).length;
+  var c = (line.match(/,/g) || []).length;
+  var sc = (line.match(/;/g) || []).length;
+  if(t >= c && t >= sc && t > 0) return "\t";
+  if(sc > c) return ";";
+  return ",";
+}
+function ppHeaderMap(cells){
+  var map = {}, hits = 0;
+  cells.forEach(function(cell, i){
+    var t = cell.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+    for(var field in PP_COLS){
+      if(map[field] !== undefined) continue;
+      if(PP_COLS[field].indexOf(t) > -1){ map[field] = i; hits++; return; }
+    }
+  });
+  return hits >= 2 ? map : null;
+}
+
+/* Turn one row of values into a bet, or into a reason it could not be one. */
+function ppRowToBet(get, seedKey){
+  var stake = ppNum(get("stake"));
+  if(!(stake > 0)) return {bad:"no stake"};
+  var desc = String(get("desc") || "").trim();
+  var type = String(get("type") || "").trim();
+  var legs = String(get("legs") || "").trim();
+  if(!desc){
+    desc = (type ? type : "PrizePicks entry") + (legs ? " \u2014 " + legs + " picks" : "");
+  }else if(type && desc.toLowerCase().indexOf(type.toLowerCase()) === -1){
+    desc = type + " \u2014 " + desc;
+  }
+  var mult = ppMultOf(get("mult"));
+  var multGiven = mult > 0;          /* a price we were told, rather than one we worked backwards */
+  var retRaw = get("ret");
+  var returned = ppHas(retRaw) ? ppNum(retRaw) : null;
+  var result = ppResultOf(get("result"));
+
+  if(!mult && returned !== null && returned > 0 && (result === "win" || result === null)) mult = returned / stake;
+  if(!mult && result === "push") mult = 1;
+  if(!(mult > 0)) return {bad:"no multiplier or payout to work out the price from"};
+
+  if(result === null){
+    if(returned === null) result = "pending";
+    else if(returned <= 0.005) result = "loss";
+    else if(Math.abs(returned - stake * mult) <= Math.max(0.02, stake * mult * 0.01)) result = "win";
+    else if(Math.abs(returned - stake) <= 0.005) result = "push";
+    else result = "partial";
+  }
+  if(result === "partial" && returned === null) return {bad:"marked partial with no amount returned"};
+  if(result === "win" && returned !== null && returned > 0 &&
+     Math.abs(returned - stake * mult) > Math.max(0.02, stake * mult * 0.01)){
+    /* Paid, but not what the ticket priced - a flex play that part-hits. Keep the price it was
+       written at and book what actually came back, which is what "partial" is for. */
+    if(multGiven) result = "partial";
+    else mult = returned / stake;
+  }
+  var bookCell = String(get("book") || "").trim().toLowerCase();
+  var book = bookCell.indexOf("poly") === 0 ? "polymarket" : bookCell ? "prizepicks" : null;
+  var date = ppDateOf(get("date"));
+  var note = String(get("note") || "").trim();
+  var auto = (book === "polymarket" ? PM_NOTE : PP_NOTE);
+  return {
+    srcKey: "pp:" + seedKey(date, desc, stake),
+    date: date, desc: desc, stake: round2(stake), mult: mult, result: result,
+    returned: result === "partial" ? round2(returned) : null,
+    note: note || (auto + (legs ? " \u00b7 " + legs + " picks" : "")),
+    book: book
+  };
+}
+
+function ppParseTable(text){
+  var lines = text.replace(/\r/g, "").split("\n").filter(function(l){ return l.trim() !== ""; });
+  if(!lines.length) return {bets:[], notes:[], rows:0};
+  var d = ppDelim(lines[0]);
+  var rows = lines.map(function(l){ return ppSplit(l, d); });
+  var map = ppHeaderMap(rows[0]);
+  var start = 0;
+  if(map){ start = 1; }
+  else { map = {date:0, desc:1, stake:2, mult:3, result:4, ret:5, note:6}; }
+
+  var bets = [], bad = [], seen = {};
+  for(var i=start;i<rows.length;i++){
+    var cells = rows[i];
+    if(!cells.join("").trim()) continue;
+    var get = (function(c){
+      return function(field){ return map[field] === undefined ? "" : (c[map[field]] || ""); };
+    })(cells);
+    var b = ppRowToBet(get, function(date, desc, stake){
+      var base = "t:" + ppHash(date + "|" + desc.toLowerCase() + "|" + stake);
+      var n = 0, key = base;
+      while(seen[key]){ n++; key = base + ":" + n; }   /* same bet twice in one sheet stays two bets */
+      seen[key] = true;
+      return key;
+    });
+    if(b.bad) bad.push("row " + (i+1) + ": " + b.bad);
+    else bets.push(b);
+  }
+  var notes = [];
+  if(bad.length) notes.push(bad.length + " row" + (bad.length === 1 ? "" : "s") + " skipped \u2014 " + bad.slice(0,3).join("; ") + (bad.length > 3 ? "\u2026" : ""));
+  if(start === 0) notes.push("no header row recognised, so columns were read in template order");
+  return {bets:bets, notes:notes, rows:rows.length - start};
+}
+
+function ppParseJson(raw){
+  var found = [], bad = [];
+  (function walk(v, depth){
+    if(v == null || depth > 6) return;
+    if(Array.isArray(v)){ for(var i=0;i<v.length;i++) walk(v[i], depth+1); return; }
+    if(typeof v !== "object") return;
+    var at = (v.attributes && typeof v.attributes === "object") ? v.attributes : v;
+    var stake = at.fee !== undefined ? at.fee : at.amount_bet !== undefined ? at.amount_bet :
+                at.entry_amount !== undefined ? at.entry_amount : at.wager !== undefined ? at.wager :
+                at.stake !== undefined ? at.stake : at.amount;
+    var status = at.status !== undefined ? at.status : at.state !== undefined ? at.state : at.result;
+    if(ppNum(stake) > 0 && status !== undefined){
+      found.push({id:v.id || at.id || null, at:at});
+      return;
+    }
+    for(var k in v){ if(Object.prototype.hasOwnProperty.call(v, k)) walk(v[k], depth+1); }
+  })(raw, 0);
+
+  var bets = [], seen = {};
+  found.forEach(function(f, i){
+    var at = f.at;
+    var pick = function(names){
+      for(var j=0;j<names.length;j++){ if(at[names[j]] !== undefined && at[names[j]] !== null) return at[names[j]]; }
+      return "";
+    };
+    var stake = pick(["fee","amount_bet","entry_amount","wager","stake","amount"]);
+    var maxPay = pick(["max_payout","potential_payout","to_win","max_win"]);
+    var mult = pick(["multiplier","payout_multiplier","odds_multiplier"]);
+    if(!ppNum(mult) && ppNum(maxPay) && ppNum(stake)) mult = ppNum(maxPay) / ppNum(stake);
+    var get = function(field){
+      switch(field){
+        case "date":   return pick(["created_at","placed_at","submitted_at","date","updated_at","settled_at"]);
+        case "desc":   return pick(["description","title","name","summary"]);
+        case "stake":  return stake;
+        case "mult":   return mult;
+        case "ret":    return pick(["payout","amount_won","winnings","actual_payout","paid_out","won_amount"]);
+        case "result": return pick(["status","state","result","outcome"]);
+        case "type":   return pick(["entry_type","type_name","game_mode","play_type","mode"]);
+        case "legs":   return pick(["pick_count","num_picks","legs","number_of_picks","picks_count"]);
+        case "note":   return "";
+        default:       return "";
+      }
+    };
+    var b = ppRowToBet(get, function(date, desc, stakeV){
+      var key = f.id ? "e:" + f.id : "j:" + ppHash(date + "|" + desc.toLowerCase() + "|" + stakeV + "|" + i);
+      while(seen[key]){ key += "x"; }
+      seen[key] = true;
+      return key;
+    });
+    if(b.bad) bad.push("entry " + (f.id || i+1) + ": " + b.bad);
+    else bets.push(b);
+  });
+  var notes = [];
+  if(bad.length) notes.push(bad.length + " entr" + (bad.length === 1 ? "y" : "ies") + " skipped \u2014 " + bad.slice(0,3).join("; ") + (bad.length > 3 ? "\u2026" : ""));
+  return {bets:bets, notes:notes, rows:found.length};
+}
+
+function ppMode(){
+  var r = document.querySelector('input[name="ppmode"]:checked');
+  return r ? r.value : "table";
+}
+function ppStatus(msg, tone){
+  var el = document.getElementById("pp-status");
+  el.innerHTML = msg;
+  el.style.color = tone === "bad" ? "var(--bad)" : tone === "good" ? "var(--good)" : "var(--ink-3)";
+}
+document.getElementById("pp-mode").addEventListener("change", function(){
+  var json = ppMode() === "json";
+  document.getElementById("pp-help-json").hidden = !json;
+  document.getElementById("pp-help-table").hidden = json;
+  document.getElementById("pp-text").placeholder = json
+    ? '{ "data": [ { "type": "entry", "id": "\u2026", "attributes": { \u2026 } } ] }'
+    : "date,bet,stake,multiplier,result\n2026-09-14,Power Play 2x - Bedard 2+ SOG,25,3,win";
+});
+document.getElementById("pp-parse").addEventListener("click", function(){
+  var txt = document.getElementById("pp-text").value.trim();
+  if(!txt){ ppStatus("Paste your entries first.", "bad"); return; }
+  var res, mode = ppMode();
+  var looksJson = txt.charAt(0) === "{" || txt.charAt(0) === "[";
+  if(mode === "json" || looksJson){
+    var parsed;
+    try{ parsed = JSON.parse(txt); }
+    catch(e){
+      if(mode === "json"){ ppStatus("That isn\u2019t valid JSON \u2014 copy the whole response, first brace to last.", "bad"); return; }
+      parsed = null;
+    }
+    if(parsed){
+      res = ppParseJson(parsed);
+      ppStatus("Read " + res.rows + " entr" + (res.rows === 1 ? "y" : "ies") + " out of that payload.", res.bets.length ? "good" : "bad");
+    }
+  }
+  if(!res){
+    res = ppParseTable(txt);
+    ppStatus("Read " + res.rows + " row" + (res.rows === 1 ? "" : "s") + ".", res.bets.length ? "good" : "bad");
+  }
+  res.emptyMsg = "Nothing there turned into a bet. Every row needs at least a stake and either a multiplier or what came back.";
+  impPreview({book:"prizepicks", boxId:"pp-preview", colLabel:"Entry"}, res);
+});
+document.getElementById("pp-card").addEventListener("click", function(ev){
+  if(!ev.target.closest(".js-pp-template")) return;
+  var box = document.getElementById("pp-text");
+  box.value = PP_TEMPLATE;
+  box.focus();
+  box.select();
+  if(navigator.clipboard) navigator.clipboard.writeText(PP_TEMPLATE).then(function(){}, function(){});
+  ppStatus("Template dropped in the box \u2014 swap the rows for your own, then press Read this.", "");
+});
+
+/* =========================================================
    Polymarket import
    ========================================================= */
 var PM_BASE = "https://data-api.polymarket.com";
 var PM_NOTE = "Imported from Polymarket";
 var PM_PAGE = 500, PM_MAX = 3000;
-var pmStaged = null;
 
 function pmAddrValue(){
   var v = (document.getElementById("pm-addr").value || "").trim();
@@ -1589,6 +1925,18 @@ function pmBuild(raw, sawPositions){
           nActivity:got.activity.length, nPositions:got.positions.length};
 }
 
+function pmShowPreview(res){
+  var notes = [];
+  if(res.skipped) notes.push(res.skipped + " split/merge/reward row" + (res.skipped === 1 ? "" : "s") + " skipped \u2014 those don\u2019t map to a single bet");
+  if(res.unmatched) notes.push(res.unmatched + " row" + (res.unmatched === 1 ? "" : "s") + " couldn\u2019t be matched to a market");
+  if(res.dead) notes.push(res.dead + " market" + (res.dead === 1 ? "" : "s") + " booked as a loss \u2014 held in your trade history, gone from your positions, never redeemed");
+  if(!res.sawPositions) notes.push("no positions list, so anything unsold is marked pending \u2014 paste the positions response too and resolved losers get booked");
+  if(res.nActivity >= PM_MAX) notes.push("hit the " + PM_MAX + "-row history cap \u2014 older trades may be missing");
+  res.notes = notes;
+  res.emptyMsg = "Nothing in that JSON resolved into a bet." +
+    (res.nActivity + res.nPositions ? " Read " + res.nActivity + " activity rows and " + res.nPositions + " positions." : "");
+  impPreview({book:"polymarket", boxId:"pm-preview", colLabel:"Market"}, res);
+}
 function pmStatus(msg, tone){
   var el = document.getElementById("pm-status");
   el.innerHTML = msg;
@@ -1603,13 +1951,36 @@ function pmShowLinks(addr){
       '<button class="btn btn-sm js-pmcopy" type="button" data-url="' + esc(l.u) + '">Copy link</button></div>';
   }).join("");
 }
-function pmRenderPreview(res){
-  var box = document.getElementById("pm-preview");
+/* One preview + apply pipeline, shared by both importers. cfg: {book, boxId, colLabel} */
+var impStaged = null;
+
+function impMarketOf(srcKey){
+  return String(srcKey).replace(/:(closed|open)$/, "");
+}
+/* Rows this import no longer produces for a market it covers are stale - an earlier import
+   saw that market differently (say, open before it resolved). Drop them, or the same money
+   gets counted twice. */
+function impStale(bets){
+  var incoming = {}, touched = {};
+  bets.forEach(function(b){ incoming[b.srcKey] = true; touched[impMarketOf(b.srcKey)] = true; });
+  return state.bets.filter(function(b){
+    return b.srcKey && touched[impMarketOf(b.srcKey)] && !incoming[b.srcKey];
+  });
+}
+function impReturn(b){
+  if(b.result === "pending") return null;
+  if(b.result === "win") return b.stake * b.mult;
+  if(b.result === "loss") return 0;
+  if(b.result === "push") return b.stake;
+  return b.returned || 0;
+}
+function impPreview(cfg, res){
+  var box = document.getElementById(cfg.boxId);
+  box.hidden = false;
   if(!res.bets.length){
-    box.hidden = false;
-    box.innerHTML = '<div class="empty">Nothing to import from that JSON.' +
-      (res.nActivity + res.nPositions ? ' Read ' + res.nActivity + ' activity rows and ' + res.nPositions + ' positions, but none resolved to a bet.' : '') + '</div>';
-    pmStaged = null;
+    box.innerHTML = '<div class="empty">' + esc(res.emptyMsg || "Nothing here resolved into a bet.") + '</div>' +
+      (res.notes && res.notes.length ? '<p class="help" style="margin-top:4px; text-align:center">' + res.notes.map(esc).join(" &middot; ") + '</p>' : "");
+    impStaged = null;
     return;
   }
   var known = {};
@@ -1618,77 +1989,59 @@ function pmRenderPreview(res){
   res.bets.forEach(function(b){
     if(known[b.srcKey]) nUpd++; else nNew++;
     stake += b.stake;
-    if(b.result !== "pending"){
-      var r = b.result === "win" ? b.stake * b.mult : b.result === "loss" ? 0 : b.result === "push" ? b.stake : (b.returned || 0);
-      pnl += r - b.stake;
-    }
+    var r = impReturn(b);
+    if(r !== null) pnl += r - b.stake;
   });
-  var nStale = pmStale(res.bets).length;
-  var notes = [];
-  if(res.skipped) notes.push(res.skipped + " split/merge/reward row" + (res.skipped === 1 ? "" : "s") + " skipped \u2014 those don\u2019t map to a single bet");
-  if(res.unmatched) notes.push(res.unmatched + " row" + (res.unmatched === 1 ? "" : "s") + " couldn\u2019t be matched to a market");
-  if(res.dead) notes.push(res.dead + " market" + (res.dead === 1 ? "" : "s") + " booked as a loss \u2014 held in your trade history, gone from your positions, never redeemed");
-  if(!res.sawPositions) notes.push("no positions list, so anything unsold is marked pending \u2014 paste the positions response too and resolved losers get booked");
-  if(res.nActivity >= PM_MAX) notes.push("hit the " + PM_MAX + "-row history cap \u2014 older trades may be missing");
+  var nStale = impStale(res.bets).length;
+  var notes = (res.notes || []).slice();
 
-  pmStaged = res.bets;
-  box.hidden = false;
+  impStaged = {book:cfg.book, bets:res.bets, boxId:cfg.boxId};
   box.innerHTML =
     '<div class="sec-head"><h2>Ready to import</h2><span class="hint">' +
-      nNew + " new \u00b7 " + nUpd + " already imported (will be refreshed) \u00b7 " +
-      (nStale ? nStale + " stale row" + (nStale === 1 ? "" : "s") + " replaced \u00b7 " : "") +
-      money(stake, {round:true}) + " staked \u00b7 " +
+      nNew + " new · " + nUpd + " already imported (will be refreshed) · " +
+      (nStale ? nStale + " stale row" + (nStale === 1 ? "" : "s") + " replaced · " : "") +
+      money(stake, {round:true}) + " staked · " +
       '<b class="num ' + signClass(pnl) + '">' + money(pnl, {signed:true}) + "</b> settled P&L</span></div>" +
     '<div class="tablewrap" style="max-height:330px; overflow-y:auto"><table style="min-width:640px"><thead><tr>' +
-      '<th>Date</th><th>Market</th><th class="r">Stake</th><th class="r">Price</th><th>Result</th><th class="r">P&L</th><th></th>' +
+      '<th>Date</th><th>' + esc(cfg.colLabel || "Bet") + '</th><th class="r">Stake</th><th class="r">Price</th>' +
+      '<th>Result</th><th class="r">P&L</th><th></th>' +
     '</tr></thead><tbody>' + res.bets.map(function(b){
-      var r = b.result === "pending" ? null : b.result === "win" ? b.stake * b.mult : b.result === "loss" ? 0 : (b.returned || 0);
+      var r = impReturn(b);
       var pl = r === null ? null : r - b.stake;
       return '<tr><td class="num" style="white-space:nowrap">' + fmtDate(b.date) + '</td>' +
         '<td class="bet-desc"><div class="d">' + esc(b.desc) + '</div></td>' +
         '<td class="r num">' + money(b.stake) + '</td>' +
-        '<td class="r num">' + b.mult.toFixed(2) + '\u00d7</td>' +
+        '<td class="r num">' + b.mult.toFixed(2) + '×</td>' +
         '<td><span class="chip ' + b.result + '">' + (RESULT_LABEL[b.result] || b.result) + '</span></td>' +
         '<td class="r num ' + (pl === null ? "" : signClass(pl)) + '" style="font-weight:600">' +
-          (pl === null ? '<span style="color:var(--ink-3)">\u2013</span>' : money(pl, {signed:true})) + '</td>' +
+          (pl === null ? '<span style="color:var(--ink-3)">–</span>' : money(pl, {signed:true})) + '</td>' +
         '<td class="r"><span class="chip ' + (known[b.srcKey] ? "push" : "pending") + '">' + (known[b.srcKey] ? "Update" : "New") + '</span></td></tr>';
     }).join("") + '</tbody></table></div>' +
     (notes.length ? '<p class="help" style="margin-top:9px">' + notes.map(esc).join(" &middot; ") + '</p>' : "") +
     '<div style="display:flex; gap:9px; margin-top:12px; flex-wrap:wrap">' +
-      '<button class="btn btn-sm btn-primary" type="button" id="pm-confirm">Import ' + res.bets.length + ' bet' + (res.bets.length === 1 ? "" : "s") + '</button>' +
-      '<button class="btn btn-sm" type="button" id="pm-cancel">Cancel</button></div>';
+      '<button class="btn btn-sm btn-primary js-imp-confirm" type="button">Import ' + res.bets.length + ' bet' + (res.bets.length === 1 ? "" : "s") + '</button>' +
+      '<button class="btn btn-sm js-imp-cancel" type="button">Cancel</button></div>';
 }
-function pmMarketOf(srcKey){
-  return String(srcKey).replace(/:(closed|open)$/, "");
-}
-/* Rows this import no longer produces for a market it covers are stale - an earlier import
-   saw that market differently (say, open before it resolved). Drop them, or the same money
-   gets counted twice. */
-function pmStale(bets){
-  var incoming = {}, touched = {};
-  bets.forEach(function(b){ incoming[b.srcKey] = true; touched[pmMarketOf(b.srcKey)] = true; });
-  return state.bets.filter(function(b){
-    return b.srcKey && touched[pmMarketOf(b.srcKey)] && !incoming[b.srcKey];
-  });
-}
-function pmApply(bets){
+function impApply(book, bets){
   var added = 0, updated = 0;
-  var stale = pmStale(bets);
+  var stale = impStale(bets);
   if(stale.length){
     state.bets = state.bets.filter(function(b){ return stale.indexOf(b) === -1; });
   }
   bets.forEach(function(nb){
     var ex = null;
     for(var i=0;i<state.bets.length;i++){ if(state.bets[i].srcKey === nb.srcKey){ ex = state.bets[i]; break; } }
+    var target = nb.book || book;
     if(ex){
       ex.date = nb.date; ex.desc = nb.desc; ex.stake = nb.stake; ex.mult = nb.mult;
-      ex.result = nb.result; ex.returned = nb.returned;
-      if(!ex.note || ex.note.indexOf(PM_NOTE) === 0) ex.note = nb.note;
+      ex.result = nb.result; ex.returned = nb.returned; ex.book = target;
+      /* keep a note the user wrote themselves; refresh one we generated */
+      if(!ex.note || ex.note.indexOf(PM_NOTE) === 0 || ex.note.indexOf(PP_NOTE) === 0) ex.note = nb.note;
       updated++;
     }else{
-      state.bets.push({id:uid(), srcKey:nb.srcKey, date:nb.date, book:"polymarket", desc:nb.desc,
+      state.bets.push({id:uid(), srcKey:nb.srcKey, date:nb.date, book:target, desc:nb.desc,
         stake:nb.stake, mult:nb.mult, result:nb.result, returned:nb.returned,
-        unitSize:round2(currentUnitSize("polymarket")), note:nb.note});
+        unitSize:round2(currentUnitSize(target)), note:nb.note});
       added++;
     }
   });
@@ -1696,6 +2049,26 @@ function pmApply(bets){
   save();
   return {added:added, updated:updated, removed:stale.length};
 }
+document.addEventListener("click", function(ev){
+  if(ev.target.closest(".js-imp-cancel")){
+    if(impStaged) document.getElementById(impStaged.boxId).hidden = true;
+    impStaged = null;
+    return;
+  }
+  if(ev.target.closest(".js-imp-confirm")){
+    if(!impStaged || !impStaged.bets.length) return;
+    var st = impStaged, r = impApply(st.book, st.bets);
+    impStaged = null;
+    document.getElementById(st.boxId).hidden = true;
+    ["pm-json","pm-json-pos","pp-text"].forEach(function(id){
+      var el = document.getElementById(id); if(el) el.value = "";
+    });
+    renderAll();
+    toast(r.added + " imported" + (r.updated ? ", " + r.updated + " refreshed" : "") +
+          (r.removed ? ", " + r.removed + " replaced" : ""));
+    selectTab("tab-dash");
+  }
+});
 function pmGet(url, signal){
   return fetch(url, {signal:signal, headers:{Accept:"application/json"}}).then(function(r){
     if(!r.ok) throw new Error("Polymarket replied " + r.status);
@@ -1744,7 +2117,7 @@ document.getElementById("pm-fetch").addEventListener("click", function(){
       return;
     }
     pmStatus("Read " + data.activity.length + " activity rows and " + data.positions.length + " open positions.", "good");
-    pmRenderPreview(pmBuild(data, true));
+    pmShowPreview(pmBuild(data, true));
   }, function(err){
     btn.disabled = false;
     pmShowLinks(addr);
@@ -1776,7 +2149,7 @@ document.getElementById("pm-parse").addEventListener("click", function(){
   var res = pmBuild(payload, !!pTxt);
   pmStatus("Read " + res.nActivity + " activity rows and " + res.nPositions + " open positions." +
     (pTxt ? "" : " Without the positions list, resolved losers stay marked pending."), pTxt ? "good" : "");
-  pmRenderPreview(res);
+  pmShowPreview(res);
 });
 document.getElementById("pm-card").addEventListener("click", function(ev){
   var copy = ev.target.closest(".js-pmcopy");
@@ -1786,23 +2159,6 @@ document.getElementById("pm-card").addEventListener("click", function(ev){
       navigator.clipboard.writeText(url).then(function(){ toast("Link copied"); }, function(){ toast("Select the link and copy it."); });
     }else{ toast("Select the link and copy it."); }
     return;
-  }
-  if(ev.target.id === "pm-cancel"){
-    document.getElementById("pm-preview").hidden = true;
-    pmStaged = null;
-    return;
-  }
-  if(ev.target.id === "pm-confirm"){
-    if(!pmStaged || !pmStaged.length) return;
-    var r = pmApply(pmStaged);
-    pmStaged = null;
-    document.getElementById("pm-preview").hidden = true;
-    document.getElementById("pm-json").value = "";
-    document.getElementById("pm-json-pos").value = "";
-    renderAll();
-    toast(r.added + " imported" + (r.updated ? ", " + r.updated + " refreshed" : "") +
-          (r.removed ? ", " + r.removed + " replaced" : ""));
-    selectTab("tab-dash");
   }
 });
 

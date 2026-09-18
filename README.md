@@ -52,6 +52,60 @@ Both take the total returned including stake, and P&L is the difference.
 - **Bankroll & data** — starting balances, unit sizing, deposits/withdrawals, and
   JSON backup / CSV export
 
+## Importing from PrizePicks
+
+**Bankroll & data → Import from PrizePicks.** PrizePicks keeps entry history behind
+your login and publishes no per-account API, so unlike Polymarket there's no address
+to point at and nothing to fetch. This is a paste, in either of two shapes.
+
+### Spreadsheet or CSV
+
+Copy straight out of Excel, Numbers or Google Sheets — tabs, commas and semicolons
+all parse, quoted fields included. A header row is matched on column *names*, so
+order doesn't matter; without one, this order is assumed:
+
+```
+date,bet,stake,multiplier,result,returned,note
+2026-09-14,Power Play 2x - Bedard 2+ SOG / Kucherov 1+ pt,25,3,win,,
+2026-09-09,Flex Play 6x - Sunday slate longshot,20,25,loss,,lottery ticket
+2026-09-04,Flex Play 4x - Judge 1+ HR combo,20,6,partial,30,3 of 4 hit
+2026-09-18,Flex Play 4x - Monday night props,25,6,pending,,
+```
+
+**Copy the template** drops those rows straight into the box to edit.
+
+Header names are matched loosely — `entry fee`, `amount`, `wager` and `cost` all
+read as the stake; `status`, `outcome` and `result` are the same column; `payout`,
+`won` and `winnings` all mean what came back. Money can carry `$` and thousands
+commas. Dates take `2026-09-14`, `9/14/2026` or `Sep 14, 2026`. Multipliers take
+`3`, `3x`, or American odds like `+150`.
+
+- **result** accepts win / loss / push / partial / pending and the obvious synonyms
+  (won, lost, refunded, voided, open…). Leave it blank and it's inferred from the
+  money: nothing back is a loss, the full ticket is a win, something in between is
+  a part-hit.
+- **returned** is only needed for a flex play that part-hits — leave it blank
+  otherwise. If an entry is marked won but paid less than the ticket priced, it's
+  recorded as a partial at the original multiplier rather than quietly repriced, so
+  the ticket keeps saying what it was worth.
+- A **book** column is honoured if present, so a mixed spreadsheet can carry
+  Polymarket rows too.
+
+Rows that can't become a bet — no stake, or no multiplier *and* no payout to work
+one out from — are listed in the preview with the reason, never silently dropped.
+
+### Entries JSON
+
+If you can get the raw payload: log in to PrizePicks in a desktop browser, open your
+entry history, and in DevTools → Network click the request that returns it, then
+**Copy → Copy response**. Paste that in. Your browser is already signed in, so you
+never handle a token, and nothing leaves the page.
+
+Field names are matched by alias rather than assumed, so stakes, multipliers, results
+and dates come across from most payload shapes. Pick-level detail varies, so an entry
+may land as its type and pick count — `Flex Play — 4 picks` — and you can rename it
+afterwards like any hand-logged bet.
+
 ## Importing from Polymarket
 
 **Bankroll & data → Import from Polymarket.** Paste the wallet address from your
@@ -97,8 +151,8 @@ and the preview counts them so nothing vanishes silently.
 
 ### Re-importing
 
-Every import is previewed before it touches your ledger, and imported bets carry a key
-tying them to their market. Re-import as often as you like: bets are refreshed in
+Both importers share one preview-and-apply path, and imported bets carry a key tying
+them to their source row. Re-import as often as you like: bets are refreshed in
 place rather than duplicated, and a row the new data no longer supports — an open
 position that has since resolved — is replaced rather than left behind. Anything
 imported stays editable by hand like any other bet.
