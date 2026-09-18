@@ -370,14 +370,33 @@ input:focus, select:focus, textarea:focus{border-color:var(--accent); outline:no
           <div class="legend" id="legend" style="margin-top:7px"></div>
         </div>
         <div class="seg" role="group" aria-label="Chart unit">
-          <button id="mode-dollars" aria-pressed="true">Dollars</button>
-          <button id="mode-units" aria-pressed="false">Units</button>
+          <button class="js-mode-btn" data-mode="dollars" aria-pressed="true">Dollars</button>
+          <button class="js-mode-btn" data-mode="units" aria-pressed="false">Units</button>
         </div>
       </div>
       <div class="chart-wrap" id="chart-wrap">
         <svg id="chart" role="img" aria-label="Cumulative profit and loss over time by book"></svg>
         <div class="tip" id="tip" hidden></div>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="chart-head">
+        <div>
+          <div class="eyebrow">Month by month</div>
+          <div class="legend" id="legend-month" style="margin-top:7px"></div>
+        </div>
+        <div class="seg" role="group" aria-label="Chart unit">
+          <button class="js-mode-btn" data-mode="dollars" aria-pressed="true">Dollars</button>
+          <button class="js-mode-btn" data-mode="units" aria-pressed="false">Units</button>
+        </div>
+      </div>
+      <div class="chart-wrap" id="month-wrap">
+        <svg id="month-chart" role="img" aria-label="Profit and loss by month, for each book"></svg>
+        <div class="tip" id="month-tip" hidden></div>
+      </div>
+      <p class="help" id="month-hint" hidden style="margin:8px 0 0"></p>
+      <div class="tablewrap" style="margin-top:14px"><table id="month-table"></table></div>
     </div>
 
     <div>
@@ -1010,6 +1029,216 @@ function niceTicks(lo, hi, n){
 }
 
 /* =========================================================
+   Month by month
+   ========================================================= */
+function monthAdd(k, n){
+  var y = +k.slice(0,4), mo = +k.slice(5,7) - 1 + n;
+  y += Math.floor(mo / 12);
+  mo = ((mo % 12) + 12) % 12;
+  return y + "-" + String(mo + 1).padStart(2, "0");
+}
+function monthLabel(k, withYear){
+  var d = new Date(+k.slice(0,4), +k.slice(5,7) - 1, 1);
+  return d.toLocaleDateString("en-US", withYear ? {month:"short", year:"numeric"} : {month:"short"});
+}
+function emptyMonth(k){
+  return {key:k, n:0, staked:0, d:{prizepicks:0, polymarket:0, all:0}, u:{prizepicks:0, polymarket:0, all:0}};
+}
+/* Every month between the first settled bet and the last, gaps included - a month with
+   no action is information, and skipping it would bend the time axis. */
+function buildMonths(){
+  var settled = state.bets.filter(isSettled);
+  if(!settled.length) return [];
+  var map = {};
+  settled.forEach(function(b){
+    var k = b.date.slice(0,7);
+    if(!map[k]) map[k] = emptyMonth(k);
+    var m = map[k], pl = pnlOf(b), un = pl / unitOf(b);
+    m.n++; m.staked += b.stake;
+    m.d[b.book] += pl; m.d.all += pl;
+    m.u[b.book] += un; m.u.all += un;
+  });
+  var keys = Object.keys(map).sort();
+  var out = [], k = keys[0], last = keys[keys.length - 1], guard = 0;
+  while(guard++ < 600){
+    out.push(map[k] || emptyMonth(k));
+    if(k === last) break;
+    k = monthAdd(k, 1);
+  }
+  return out;
+}
+/* A column with its data-end rounded and its baseline end square. */
+function colPath(x, w, y0, y1, r){
+  var up = y1 < y0;
+  var h = Math.abs(y1 - y0);
+  r = Math.min(r, w / 2, h);
+  if(h < 0.6) return "";
+  if(r <= 0.4) return "M" + x + " " + y0 + "H" + (x + w) + "V" + y1 + "H" + x + "Z";
+  return up
+    ? "M" + x + " " + y0 + "V" + (y1 + r) + "Q" + x + " " + y1 + " " + (x + r) + " " + y1 +
+      "H" + (x + w - r) + "Q" + (x + w) + " " + y1 + " " + (x + w) + " " + (y1 + r) + "V" + y0 + "Z"
+    : "M" + x + " " + y0 + "V" + (y1 - r) + "Q" + x + " " + y1 + " " + (x + r) + " " + y1 +
+      "H" + (x + w - r) + "Q" + (x + w) + " " + y1 + " " + (x + w) + " " + (y1 - r) + "V" + y0 + "Z";
+}
+var MONTH_SERIES = [
+  {key:"prizepicks", label:"PrizePicks", color:"var(--pp)"},
+  {key:"polymarket", label:"Polymarket", color:"var(--pm)"}
+];
+function renderMonthLegend(){
+  document.getElementById("legend-month").innerHTML = MONTH_SERIES.map(function(s){
+    return '<span class="li"><span class="sw" style="background:' + s.color + '; width:11px; height:11px; border-radius:3px"></span>' + s.label + '</span>';
+  }).join("");
+}
+function renderMonthly(){
+  var wrap = document.getElementById("month-wrap");
+  var svg = document.getElementById("month-chart");
+  var hint = document.getElementById("month-hint");
+  var all = buildMonths();
+  var W = Math.max(280, wrap.clientWidth || 640);
+  var narrow = W < 520;
+  var H = narrow ? 200 : 250;
+  var m = {t:14, r:12, b:28, l:narrow ? 46 : 56};
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  svg.setAttribute("height", H);
+
+  if(!all.length){
+    hint.hidden = true;
+    svg.innerHTML = '<text x="' + (W/2) + '" y="' + (H/2) + '" text-anchor="middle" fill="var(--ink-3)" font-size="13" font-family="Archivo, sans-serif">Settle a bet and the month it lands in shows up here.</text>';
+    return;
+  }
+  var CAP = 12;
+  var months = all.slice(-CAP);
+  hint.hidden = all.length <= CAP;
+  if(all.length > CAP) hint.textContent = "Showing the last " + CAP + " months. The table below carries all " + all.length + ".";
+
+  var field = chartMode === "units" ? "u" : "d";
+  var innerW = W - m.l - m.r, innerH = H - m.t - m.b;
+  var lo = 0, hi = 0;
+  months.forEach(function(mo){
+    MONTH_SERIES.forEach(function(sr){
+      var v = mo[field][sr.key];
+      if(v < lo) lo = v;
+      if(v > hi) hi = v;
+    });
+  });
+  if(hi - lo < 1e-6){ hi += 1; lo -= 1; }
+  var pad = (hi - lo) * 0.12;
+  hi += pad; lo -= pad;
+  var y = function(v){ return m.t + (hi - v) / (hi - lo) * innerH; };
+  var band = innerW / months.length;
+  var groupW = Math.min(band * 0.7, 2 * 24 + 2);
+  var barW = Math.max(3, (groupW - 2) / 2);          /* 2px of surface between the pair */
+  var y0 = y(0);
+
+  var parts = [];
+  niceTicks(lo, hi, narrow ? 4 : 5).forEach(function(v){
+    var yy = y(v), zero = Math.abs(v) < 1e-9;
+    parts.push('<line x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + yy.toFixed(1) + '" y2="' + yy.toFixed(1) +
+      '" stroke="' + (zero ? "var(--line-2)" : "var(--grid)") + '" stroke-width="1" />');
+    parts.push('<text x="' + (m.l - 8) + '" y="' + (yy + 3.5).toFixed(1) + '" text-anchor="end" fill="var(--ink-3)" font-size="10.5" font-family="IBM Plex Mono, monospace">' +
+      esc(chartMode === "units" ? (v > 0 ? "+" : v < 0 ? "\u2212" : "") + Math.abs(v).toFixed(0) + "u"
+                                : money(v, {round:true, signed:v > 0})) + '</text>');
+  });
+
+  /* month highlights first, so they sit behind the bars rather than painting over them */
+  months.forEach(function(mo, i){
+    parts.push('<rect class="js-mbg" data-i="' + i + '" x="' + (m.l + band * i).toFixed(1) + '" y="' + m.t +
+      '" width="' + band.toFixed(1) + '" height="' + innerH + '" fill="transparent" />');
+  });
+
+  var step = Math.ceil(months.length / (narrow ? 4 : 8));
+  var hits = [];
+  months.forEach(function(mo, i){
+    var cx = m.l + band * i + band / 2;
+    MONTH_SERIES.forEach(function(sr, j){
+      var v = mo[field][sr.key];
+      var bx = cx - groupW / 2 + j * (barW + 2);
+      var d = colPath(bx, barW, y0, y(v), 4);
+      if(d) parts.push('<path d="' + d + '" fill="' + sr.color + '" />');
+    });
+    if(i % step === 0 || i === months.length - 1){
+      var showYear = i === 0 || mo.key.slice(5) === "01";
+      parts.push('<text x="' + cx.toFixed(1) + '" y="' + (H - 9) + '" text-anchor="middle" fill="var(--ink-3)" font-size="10.5" font-family="IBM Plex Mono, monospace">' +
+        esc(monthLabel(mo.key, showYear)) + '</text>');
+    }
+    hits.push('<rect class="js-mband" data-i="' + i + '" x="' + (m.l + band * i).toFixed(1) + '" y="' + m.t +
+      '" width="' + band.toFixed(1) + '" height="' + innerH + '" fill="transparent" />');
+  });
+  svg.innerHTML = parts.join("") + hits.join("");   /* hit targets last: always on top */
+
+  var tip = document.getElementById("month-tip");
+  svg.querySelectorAll(".js-mband").forEach(function(rect){
+    rect.addEventListener("pointerenter", function(){
+      var mo = months[+rect.getAttribute("data-i")];
+      tip.hidden = false;
+      tip.innerHTML = '<div class="t-date">' + esc(monthLabel(mo.key, true)) + '</div>' +
+        MONTH_SERIES.map(function(sr){
+          var v = mo[field][sr.key];
+          return '<div class="t-row"><span class="l"><i class="dot" style="background:' + sr.color + '"></i>' + sr.label + '</span>' +
+            '<b class="num ' + signClass(v) + '">' + (chartMode === "units" ? units(v, {signed:true}) : money(v, {signed:true})) + '</b></div>';
+        }).join("") +
+        '<div class="t-row" style="border-top:1px solid var(--line); margin-top:4px; padding-top:4px">' +
+          '<span class="l">Net</span><b class="num ' + signClass(mo[field].all) + '">' +
+          (chartMode === "units" ? units(mo[field].all, {signed:true}) : money(mo[field].all, {signed:true})) + '</b></div>' +
+        '<div class="t-row"><span class="l">' + mo.n + (mo.n === 1 ? " bet" : " bets") + ' settled</span>' +
+          '<b class="num" style="color:var(--ink-2)">' + money(mo.staked, {round:true}) + ' staked</b></div>';
+      var bg = svg.querySelector('.js-mbg[data-i="' + rect.getAttribute("data-i") + '"]');
+      if(bg) bg.setAttribute("fill", "var(--surface-2)");
+      var r = svg.getBoundingClientRect();
+      var scale = r.width / W;
+      var cx = (m.l + band * (+rect.getAttribute("data-i")) + band / 2) * scale;
+      var half = band * scale / 2;
+      /* sit beside the hovered month, never on top of the bars it is describing */
+      var left = cx + half + 10;
+      if(left + tip.offsetWidth > r.width) left = cx - half - 10 - tip.offsetWidth;
+      left = Math.max(0, Math.min(left, r.width - tip.offsetWidth));
+      tip.style.left = left + "px";
+      tip.style.top = (m.t + 4) * scale + "px";
+    });
+    rect.addEventListener("pointerleave", function(){
+      var bg = svg.querySelector('.js-mbg[data-i="' + rect.getAttribute("data-i") + '"]');
+      if(bg) bg.setAttribute("fill", "transparent");
+    });
+  });
+  svg.addEventListener("pointerleave", function(){ tip.hidden = true; });
+}
+function renderMonthTable(){
+  var all = buildMonths().slice().reverse();
+  var t = document.getElementById("month-table");
+  if(!all.length){
+    t.innerHTML = '<tbody><tr><td><div class="empty">No settled bets yet, so there is no month to break down.</div></td></tr></tbody>';
+    return;
+  }
+  var tot = {n:0, staked:0, pp:0, pm:0, net:0, u:0};
+  var rows = all.map(function(mo){
+    var roi = mo.staked > 0 ? mo.d.all / mo.staked * 100 : 0;
+    tot.n += mo.n; tot.staked += mo.staked; tot.pp += mo.d.prizepicks;
+    tot.pm += mo.d.polymarket; tot.net += mo.d.all; tot.u += mo.u.all;
+    return '<tr><td style="white-space:nowrap; font-weight:500">' + esc(monthLabel(mo.key, true)) + '</td>' +
+      '<td class="r num">' + mo.n + '</td>' +
+      '<td class="r num">' + money(mo.staked, {round:true}) + '</td>' +
+      '<td class="r num ' + signClass(mo.d.prizepicks) + '">' + (mo.n ? money(mo.d.prizepicks, {signed:true}) : '<span style="color:var(--ink-3)">\u2013</span>') + '</td>' +
+      '<td class="r num ' + signClass(mo.d.polymarket) + '">' + (mo.n ? money(mo.d.polymarket, {signed:true}) : '<span style="color:var(--ink-3)">\u2013</span>') + '</td>' +
+      '<td class="r num ' + signClass(mo.d.all) + '" style="font-weight:600">' + (mo.n ? money(mo.d.all, {signed:true}) : '<span style="color:var(--ink-3)">\u2013</span>') + '</td>' +
+      '<td class="r num ' + signClass(mo.u.all) + '">' + (mo.n ? units(mo.u.all, {signed:true}) : '<span style="color:var(--ink-3)">\u2013</span>') + '</td>' +
+      '<td class="r num ' + signClass(roi) + '">' + (mo.staked > 0 ? pct(roi) : '<span style="color:var(--ink-3)">\u2013</span>') + '</td></tr>';
+  }).join("");
+  var totRoi = tot.staked > 0 ? tot.net / tot.staked * 100 : 0;
+  t.innerHTML = '<thead><tr><th>Month</th><th class="r">Bets</th><th class="r">Staked</th>' +
+      '<th class="r">PrizePicks</th><th class="r">Polymarket</th><th class="r">Net</th><th class="r">Units</th><th class="r">ROI</th></tr></thead>' +
+    '<tbody>' + rows + '</tbody>' +
+    '<tfoot><tr style="border-top:2px solid var(--line-2)">' +
+      '<td style="font-weight:700">All time</td><td class="r num">' + tot.n + '</td>' +
+      '<td class="r num">' + money(tot.staked, {round:true}) + '</td>' +
+      '<td class="r num ' + signClass(tot.pp) + '">' + money(tot.pp, {signed:true}) + '</td>' +
+      '<td class="r num ' + signClass(tot.pm) + '">' + money(tot.pm, {signed:true}) + '</td>' +
+      '<td class="r num ' + signClass(tot.net) + '" style="font-weight:700">' + money(tot.net, {signed:true}) + '</td>' +
+      '<td class="r num ' + signClass(tot.u) + '">' + units(tot.u, {signed:true}) + '</td>' +
+      '<td class="r num ' + signClass(totRoi) + '">' + pct(totRoi) + '</td>' +
+    '</tr></tfoot>';
+}
+
+/* =========================================================
    Tables
    ========================================================= */
 function betRow(b){
@@ -1313,7 +1542,7 @@ function selectTab(id){
     document.getElementById(p[1]).hidden = !on;
   });
   try{ localStorage.setItem(KEY + "/tab", id); }catch(e){}
-  if(id === "tab-dash") renderChart();
+  if(id === "tab-dash"){ renderChart(); renderMonthly(); }
 }
 
 ["f-search","f-book","f-result","f-sort"].forEach(function(id){
@@ -1409,13 +1638,17 @@ document.getElementById("btn-clear-sample").addEventListener("click", function()
   save(); renderAll(); selectTab("tab-manage"); toast("Samples cleared — set your bankrolls");
 });
 
-document.getElementById("mode-dollars").addEventListener("click", function(){ setMode("dollars"); });
-document.getElementById("mode-units").addEventListener("click", function(){ setMode("units"); });
+document.addEventListener("click", function(ev){
+  var btn = ev.target.closest(".js-mode-btn");
+  if(btn) setMode(btn.getAttribute("data-mode"));
+});
 function setMode(m){
   chartMode = m;
-  document.getElementById("mode-dollars").setAttribute("aria-pressed", m === "dollars" ? "true" : "false");
-  document.getElementById("mode-units").setAttribute("aria-pressed", m === "units" ? "true" : "false");
+  document.querySelectorAll(".js-mode-btn").forEach(function(btn){
+    btn.setAttribute("aria-pressed", btn.getAttribute("data-mode") === m ? "true" : "false");
+  });
   renderChart();
+  renderMonthly();
 }
 
 var toastTimer = null;
@@ -1432,7 +1665,7 @@ function toast(msg){
 var resizeTimer = null;
 window.addEventListener("resize", function(){
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(renderChart, 120);
+  resizeTimer = setTimeout(function(){ renderChart(); renderMonthly(); }, 120);
 });
 
 /* =========================================================
@@ -2171,6 +2404,9 @@ function renderAll(){
   renderBooks();
   renderLegend();
   renderChart();
+  renderMonthLegend();
+  renderMonthly();
+  renderMonthTable();
   renderRecent();
   renderBetsTable();
   renderManage();

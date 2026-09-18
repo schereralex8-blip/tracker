@@ -21,6 +21,15 @@ against, so last month's 1u bet stays 1u even after the bankroll moves.
 win rate, open exposure on pending bets, and a cumulative P&L curve per book plus
 combined.
 
+**Month by month** — paired columns per month, one per book, reading off a zero
+baseline so a losing month hangs below the line. Hover a month for its split, net,
+bet count and money staked. The chart shows the last twelve months; the table under
+it carries every month, with staked, per-book P&L, net, units and ROI, and an
+all-time row at the foot. Months where nothing settled stay in the sequence as gaps
+rather than being skipped — a quiet month is information, and dropping it would bend
+the time axis. The dollars/units switch is shared with the cumulative chart, so the
+two never disagree.
+
 ## Logging a bet
 
 One form covers both books, because both reduce to the same thing: an amount at
@@ -46,7 +55,7 @@ Both take the total returned including stake, and P&L is the difference.
 ## Tabs
 
 - **Dashboard** — KPI strip, a card per book, the cumulative P&L chart (dollars or
-  units, hover for any date), and the last six bets
+  units, hover for any date), the month-by-month breakdown, and the last six bets
 - **Bets** — the full ledger, filterable by book, result and free text, sortable by
   date, P&L or stake; the footer totals whatever is on screen
 - **Bankroll & data** — starting balances, unit sizing, deposits/withdrawals, and
