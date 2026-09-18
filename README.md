@@ -80,11 +80,18 @@ through the same rules the spreadsheet importer uses, so a missing multiplier is
 worked out from the payout, a garbled row is skipped with a reason rather than
 imported wrong, and nothing malformed reaches your ledger.
 
-**This needs the published page**, because it asks Claude on your own account —
-opened as a local file there is no Claude to ask, so the button stays hidden rather
-than sitting there dead. The first read asks your permission, and the calls come out
-of your own Claude usage. Screenshots are sent for reading only; they aren't stored
-in the tracker.
+Reading in the page asks Claude on your own account, which needs the tracker running
+inside Claude — the Claude app, or claude.ai in a browser. A local copy of the file,
+or one added to a phone home screen, runs on its own with no Claude to ask. The first
+read asks your permission, and calls come out of your own Claude usage. Screenshots
+are sent for reading only; they aren't stored in the tracker.
+
+**Where that isn't available, the panel says so** — naming which piece is missing
+(Claude runtime, sampling, images) rather than hiding the feature — and offers the
+route that always works: **Copy the prompt**, send it to Claude in any ordinary chat
+along with your screenshots, and Claude replies with CSV rows. Paste those into the
+importer below and they land as bets, with the `book` column routing each to the
+right account. Same result, one step round the houses, and it works on any device.
 
 ## Importing from PrizePicks
 

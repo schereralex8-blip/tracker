@@ -1761,6 +1761,20 @@ var SHOT_PROMPT =
   "- Plain numbers only: 25.5, never \"$25.50\".\n" +
   "- Ignore an image with no bet in it. If none of them has one, reply with [].";
 
+var SHOT_RELAY =
+  "Read the bet slip in this screenshot. Reply with ONLY CSV: this exact header line, then one row per bet.\n\n" +
+  "date,book,bet,stake,multiplier,result,returned,note\n\n" +
+  "- date: YYYY-MM-DD, the date the bet was placed\n" +
+  "- book: PrizePicks or Polymarket\n" +
+  "- bet: short description - the entry type and picks, or the market and the side\n" +
+  "- stake: dollars at risk. PrizePicks: the entry fee. Polymarket: shares x price paid\n" +
+  "- multiplier: the TOTAL return multiple on a win, not the profit. PrizePicks prints it (3x, 6x). " +
+  "Polymarket: 1 / price per share, so 40 cents a share is 2.5\n" +
+  "- result: win, loss, push, partial, or pending\n" +
+  "- returned: only when result is partial - the dollars that came back including stake. Otherwise blank\n" +
+  "- note: anything else worth keeping, or blank\n\n" +
+  "Plain numbers, no dollar signs. No text before or after the CSV.";
+
 var shotProbe = {runtime:false, sampling:false, images:false};
 function initShots(){
   if(!window.claude || typeof window.claude.use !== "function") return;
@@ -1805,8 +1819,23 @@ function shotWhy(){
     '<p class="help" style="margin:0">' + body + '</p>' + line +
     '<div style="display:flex; gap:9px; margin-top:13px; flex-wrap:wrap">' +
       (shotProbe.sampling ? '<button type="button" class="btn btn-sm" id="shot-anyway">Let me try anyway</button>' : "") +
-      '<button type="button" class="btn btn-sm btn-primary" id="shot-manual">Log it by hand instead</button>' +
-    '</div></div>';
+      '<button type="button" class="btn btn-sm" id="shot-manual">Log it by hand</button>' +
+    '</div></div>' +
+
+    '<div style="border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-top:12px">' +
+      '<h4 style="margin:0 0 6px; font-size:14px; font-weight:600">Screenshots still work \u2014 one step round the houses</h4>' +
+      '<p class="help" style="margin:0 0 10px">Send the screenshot to Claude in an ordinary chat with the prompt below. ' +
+      'Claude answers with a row of CSV; paste that into the importer and it lands as a bet. Works on any device, ' +
+      'and several slips in one go.</p>' +
+      '<div style="display:flex; gap:9px; flex-wrap:wrap">' +
+        '<button type="button" class="btn btn-sm btn-primary" id="shot-copy-prompt">Copy the prompt</button>' +
+        '<button type="button" class="btn btn-sm" id="shot-goimport">Open the importer</button>' +
+      '</div>' +
+      '<details style="margin-top:11px"><summary class="help" style="cursor:pointer">See the prompt</summary>' +
+      '<pre style="white-space:pre-wrap; font-family:\'IBM Plex Mono\', monospace; font-size:11px; color:var(--ink-2); ' +
+      'background:var(--surface-2); border-radius:8px; padding:10px; margin:8px 0 0; overflow-x:auto">' +
+      esc(SHOT_RELAY) + '</pre></details>' +
+    '</div>';
 }
 function shotStatus(msg, tone){
   var el = document.getElementById("shot-status");
@@ -1859,7 +1888,27 @@ function openShot(force){
 }
 document.addEventListener("click", function(ev){
   if(ev.target.id === "shot-anyway"){ openShot(true); return; }
-  if(ev.target.id === "shot-manual"){ closeShot(); openSheet(null); }
+  if(ev.target.id === "shot-manual"){ closeShot(); openSheet(null); return; }
+  if(ev.target.id === "shot-copy-prompt"){
+    var btn = ev.target;
+    if(navigator.clipboard){
+      navigator.clipboard.writeText(SHOT_RELAY).then(function(){
+        btn.textContent = "Copied \u2014 now send it with your screenshot";
+        setTimeout(function(){ btn.textContent = "Copy the prompt"; }, 2600);
+      }, function(){ toast("Open \u201cSee the prompt\u201d and copy it by hand."); });
+    }else{
+      toast("Open \u201cSee the prompt\u201d and copy it by hand.");
+    }
+    return;
+  }
+  if(ev.target.id === "shot-goimport"){
+    closeShot();
+    selectTab("tab-manage");
+    var card = document.getElementById("pp-card");
+    if(card) card.scrollIntoView({behavior:"smooth", block:"start"});
+    var box = document.getElementById("pp-text");
+    if(box) setTimeout(function(){ box.focus(); }, 350);
+  }
 });
 function closeShot(){
   if(shotCtl){ shotCtl.abort(); shotCtl = null; }
