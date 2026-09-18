@@ -52,6 +52,57 @@ Both take the total returned including stake, and P&L is the difference.
 - **Bankroll & data** — starting balances, unit sizing, deposits/withdrawals, and
   JSON backup / CSV export
 
+## Importing from Polymarket
+
+**Bankroll & data → Import from Polymarket.** Paste the wallet address from your
+profile URL (`polymarket.com/profile/0x…` — the proxy wallet), and the tracker reads
+your public trade history off Polymarket's data API and turns each market into a bet.
+Read-only public data: no keys, no signing, nothing that can move funds.
+
+Set the Polymarket starting bankroll *before* importing — each imported bet snapshots
+the unit size it was sized against. If you get the order wrong, **Resize all Polymarket
+bets** re-stamps them at the current unit.
+
+### Two routes to the same import
+
+- **Fetch from Polymarket** — one click, when the page can reach polymarket.com
+  directly. That means `index.html` opened from your own machine.
+- **Paste JSON** — the tracker builds the two API links, you open them and paste
+  the responses back. Needed on claude.ai, where the page is sandboxed and cannot
+  call other sites. Same parser, same result.
+
+### What it does with the data
+
+Trades are aggregated per market and outcome, so a position filled across five orders
+becomes one bet with a blended entry price. Each market can produce a closed bet, an
+open bet, or both:
+
+| Polymarket | Becomes |
+| --- | --- |
+| Bought, redeemed at $1 | Win — stake is your cost, payout multiple is `1 / avg price` |
+| Bought, sold before resolution | Partial — the sale proceeds are the return |
+| Bought, resolved against you | Loss |
+| Bought, still holding | Pending, counted as open exposure |
+| Sold part, still holding the rest | Two bets — cost basis split pro-rata by shares |
+| Resolved your way, not yet claimed | Win, at $1 a share |
+
+**Paste both responses when you can.** A market you lost leaves no trade when it
+resolves — the position simply disappears — so nothing in your trade history says you
+lost. The positions list is what lets those get booked as losses instead of sitting
+open forever. Import with trade history alone and they stay pending; the preview says
+so when that happens.
+
+Splits, merges, conversions and rewards are skipped — they don't map to a single bet —
+and the preview counts them so nothing vanishes silently.
+
+### Re-importing
+
+Every import is previewed before it touches your ledger, and imported bets carry a key
+tying them to their market. Re-import as often as you like: bets are refreshed in
+place rather than duplicated, and a row the new data no longer supports — an open
+position that has since resolved — is replaced rather than left behind. Anything
+imported stays editable by hand like any other bet.
+
 ## Backing up
 
 The **Bankroll & data** tab prints your whole ledger as JSON. Copy it somewhere

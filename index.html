@@ -411,6 +411,45 @@ input:focus, select:focus, textarea:focus{border-color:var(--accent); outline:no
   <section class="panel" id="panel-manage" role="tabpanel" aria-labelledby="tab-manage" hidden>
     <div class="manage-grid" id="book-settings"></div>
 
+    <div class="card" id="pm-card">
+      <div class="sec-head"><h2>Import from Polymarket</h2><span class="hint">Reads your public trade history and turns each market into a bet</span></div>
+      <div class="grid f2">
+        <div class="field">
+          <label for="pm-addr">Polymarket wallet address</label>
+          <input id="pm-addr" type="text" spellcheck="false" autocomplete="off" placeholder="0x0000000000000000000000000000000000000000">
+          <p class="help" style="margin-bottom:2px">Set this book&rsquo;s starting bankroll above first &mdash; imported bets are sized in units against it.</p>
+          <p class="help">The address in your profile URL &mdash; <b>polymarket.com/profile/0x&hellip;</b>. That&rsquo;s your proxy wallet. Public read-only data: no keys, no signing, nothing that can move funds.</p>
+        </div>
+        <div class="field">
+          <label>Get the data</label>
+          <div style="display:flex; gap:8px; flex-wrap:wrap">
+            <button class="btn btn-sm btn-primary" id="pm-fetch" type="button">Fetch from Polymarket</button>
+            <button class="btn btn-sm" id="pm-manual" type="button">Paste JSON instead</button>
+          </div>
+          <p class="help" id="pm-status">Fetching works when this page can reach polymarket.com directly &mdash; opening <b>index.html</b> from your own machine. On claude.ai the page is sandboxed and can&rsquo;t call other sites, so use <b>Paste JSON</b>; it produces exactly the same import.</p>
+        </div>
+      </div>
+
+      <div id="pm-paste" hidden style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px">
+        <div class="eyebrow" style="margin-bottom:8px">Open each link, copy the whole response, paste it in the matching box</div>
+        <div id="pm-links" style="display:flex; flex-direction:column; gap:7px; margin-bottom:13px"></div>
+        <div class="grid f2">
+          <div class="field">
+            <label for="pm-json">Trade history JSON</label>
+            <textarea id="pm-json" spellcheck="false" placeholder="[ { &quot;type&quot;: &quot;TRADE&quot;, &quot;side&quot;: &quot;BUY&quot;, &hellip; } ]" style="min-height:118px; font-family:'IBM Plex Mono', monospace; font-size:11.5px"></textarea>
+          </div>
+          <div class="field">
+            <label for="pm-json-pos">Open positions JSON</label>
+            <textarea id="pm-json-pos" spellcheck="false" placeholder="[ { &quot;size&quot;: 100, &quot;avgPrice&quot;: 0.43, &hellip; } ]" style="min-height:118px; font-family:'IBM Plex Mono', monospace; font-size:11.5px"></textarea>
+          </div>
+        </div>
+        <p class="help" style="margin-top:9px">Paste <b>both</b> if you can. A market you lost leaves no trade when it resolves &mdash; the position just disappears &mdash; so the positions list is how those get booked as losses instead of sitting open forever. Paste an empty <code>[]</code> if you genuinely hold nothing.</p>
+        <button class="btn btn-sm btn-primary" id="pm-parse" type="button" style="margin-top:10px">Read this JSON</button>
+      </div>
+
+      <div id="pm-preview" hidden style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px"></div>
+    </div>
+
     <div class="card">
       <div class="sec-head"><h2>Your data</h2><span class="hint">Everything is stored in this browser only. Copy the JSON to back it up or move it to another device.</span></div>
       <div class="grid f2" style="margin-bottom:12px">
@@ -643,7 +682,14 @@ function currentUnitSize(book){
   var cfg = state.books[book];
   if(cfg.unitMode === "fixed") return Math.max(0.01, Number(cfg.unitFixed) || 0);
   var v = bankroll(book) * (Number(cfg.unitPct) || 0) / 100;
+  /* A percentage of nothing is nothing, and every unit figure downstream would be noise.
+     Stand on the flat amount until there is a bankroll to take a percentage of. */
+  if(v <= 0) return Math.max(0.01, Number(cfg.unitFixed) || 1);
   return Math.max(0.01, v);
+}
+function unitIsFallback(book){
+  var cfg = state.books[book];
+  return cfg.unitMode === "pct" && bankroll(book) <= 0;
 }
 function stats(book){
   var list = betsFor(book), settled = list.filter(isSettled);
@@ -742,7 +788,8 @@ function renderBooks(){
   document.getElementById("books").innerHTML = Object.keys(BOOKS).map(function(key){
     var b = BOOKS[key], s = stats(key), cfg = state.books[key];
     var u = currentUnitSize(key);
-    var unitLabel = cfg.unitMode === "fixed" ? "flat" : cfg.unitPct + "% of bankroll";
+    var unitLabel = unitIsFallback(key) ? "flat \u2014 set a bankroll"
+                  : cfg.unitMode === "fixed" ? "flat" : cfg.unitPct + "% of bankroll";
     return '' +
     '<article class="book ' + b.cls + '"><div class="rail"></div><div class="book-in">' +
       '<div class="book-top">' +
@@ -1019,7 +1066,10 @@ function renderManage(){
         '<div class="field"><label for="s-fixed-' + key + '">Flat unit ($)</label>' +
           '<input id="s-fixed-' + key + '" class="js-fixed" data-book="' + key + '" type="number" step="0.01" min="0.01" value="' + cfg.unitFixed + '"' + (cfg.unitMode==="fixed"?"":" disabled") + '></div>' +
       '</div>' +
-      '<p class="help" style="margin:9px 0 0">One unit right now: <b class="num">' + money(currentUnitSize(key)) + '</b>. New bets default to this; bets already logged keep the unit they were sized against.</p>' +
+      '<p class="help" style="margin:9px 0 0">One unit right now: <b class="num">' + money(currentUnitSize(key)) + '</b>' +
+        (unitIsFallback(key) ? ' \u2014 falling back to the flat amount until this book has a bankroll' : '') +
+        '. New bets default to this; bets already logged keep the unit they were sized against.</p>' +
+      '<button class="btn btn-sm js-resize" type="button" data-book="' + key + '" style="margin-top:9px">Resize all ' + b.name + ' bets to ' + money(currentUnitSize(key)) + '</button>' +
       '<div style="margin-top:16px; border-top:1px solid var(--line); padding-top:13px">' +
         '<div class="eyebrow" style="margin-bottom:9px">Deposits &amp; withdrawals</div>' +
         '<div class="grid" style="grid-template-columns:104px 1fr 1fr auto; gap:8px; align-items:end">' +
@@ -1272,6 +1322,18 @@ document.getElementById("panel-manage").addEventListener("click", function(ev){
     save(); renderAll(); toast("Transfer recorded");
     return;
   }
+  var rs = ev.target.closest(".js-resize");
+  if(rs){
+    var rb = rs.getAttribute("data-book");
+    var n = betsFor(rb).length;
+    if(!n){ toast("No " + BOOKS[rb].name + " bets to resize."); return; }
+    if(!confirm("Re-size all " + n + " " + BOOKS[rb].name + " bet" + (n === 1 ? "" : "s") + " against the current unit of " +
+                money(currentUnitSize(rb)) + "?\n\nThis rewrites the unit figures on bets you already logged.")) return;
+    var u = round2(currentUnitSize(rb));
+    state.bets.forEach(function(x){ if(x.book === rb) x.unitSize = u; });
+    save(); renderAll(); toast("Units resized to " + money(u));
+    return;
+  }
   var del = ev.target.closest(".js-mdel");
   if(del){
     state.moves = state.moves.filter(function(m){ return m.id !== del.getAttribute("data-id"); });
@@ -1340,6 +1402,411 @@ window.addEventListener("resize", function(){
 });
 
 /* =========================================================
+   Polymarket import
+   ========================================================= */
+var PM_BASE = "https://data-api.polymarket.com";
+var PM_NOTE = "Imported from Polymarket";
+var PM_PAGE = 500, PM_MAX = 3000;
+var pmStaged = null;
+
+function pmAddrValue(){
+  var v = (document.getElementById("pm-addr").value || "").trim();
+  return /^0x[0-9a-fA-F]{40}$/.test(v) ? v : null;
+}
+function pmUrls(a){
+  return [
+    {k:"Trade history", u: PM_BASE + "/activity?user=" + a + "&limit=" + PM_PAGE + "&offset=0&sortBy=TIMESTAMP&sortDirection=DESC"},
+    {k:"Open positions", u: PM_BASE + "/positions?user=" + a + "&sizeThreshold=0.1&limit=" + PM_PAGE}
+  ];
+}
+function pmNum(v){
+  var n = typeof v === "string" ? parseFloat(v) : v;
+  return (typeof n === "number" && isFinite(n)) ? n : 0;
+}
+function pmDate(t){
+  var n = pmNum(t);
+  if(!n) return iso(new Date());
+  if(n < 1e11) n *= 1000;
+  var d = new Date(n);
+  return isFinite(d.getTime()) ? iso(d) : iso(new Date());
+}
+function pmShares(n){
+  return n >= 100 ? Math.round(n).toLocaleString("en-US") : String(Math.round(n*100)/100);
+}
+
+/* Sort whatever JSON we were handed into activity rows and position rows. */
+function pmCollect(raw){
+  var act = [], pos = [];
+  (function walk(v, depth){
+    if(v == null || depth > 4) return;
+    if(Array.isArray(v)){ for(var i=0;i<v.length;i++) walk(v[i], depth+1); return; }
+    if(typeof v !== "object") return;
+    if(v.type !== undefined || v.side !== undefined || v.transactionHash !== undefined){ act.push(v); return; }
+    if(v.avgPrice !== undefined || v.curPrice !== undefined || v.initialValue !== undefined){ pos.push(v); return; }
+    ["activity","positions","data","results","trades","items"].forEach(function(k){ if(v[k]) walk(v[k], depth+1); });
+  })(raw, 0);
+  return {activity:act, positions:pos};
+}
+
+/* Aggregate rows into bets: one market+outcome becomes a closed bet, an open bet, or both.
+   sawPositions tells us whether the open-positions list is in hand. It matters: a market you
+   lost leaves no trade row when it resolves, the position simply disappears. Shares that
+   activity says you still hold but positions no longer lists are therefore losers - an
+   inference we only make when we actually have the positions list. */
+function pmBuild(raw, sawPositions){
+  var got = pmCollect(raw);
+  if(sawPositions === undefined) sawPositions = got.positions.length > 0;
+  var groups = {}, order = [], skipped = 0, unmatched = 0, dead = 0;
+
+  function keyOf(r){
+    if(r.asset) return "a:" + r.asset;
+    if(r.conditionId) return "c:" + r.conditionId + ":" + (r.outcomeIndex == null ? "0" : r.outcomeIndex);
+    return null;
+  }
+  function grp(key, r){
+    if(!groups[key]){
+      groups[key] = {key:key, cid:r.conditionId || "", title:r.title || r.slug || "Polymarket market",
+        outcome:r.outcome || "", shares:0, cost:0, soldShares:0, proceeds:0,
+        redeemShares:0, redeemed:0, first:null, src:"activity"};
+      order.push(key);
+    }
+    return groups[key];
+  }
+
+  var posByKey = {};
+  got.positions.forEach(function(r){
+    var key = keyOf(r);
+    if(!key){ unmatched++; return; }
+    posByKey[key] = {size:pmNum(r.size), avg:pmNum(r.avgPrice), initial:pmNum(r.initialValue),
+                     redeemable:!!r.redeemable, row:r};
+  });
+
+  var trades = [], redeems = [];
+  got.activity.forEach(function(r){
+    var t = String(r.type || (r.side ? "TRADE" : "")).toUpperCase();
+    if(t === "TRADE" || t === "BUY" || t === "SELL") trades.push(r);
+    else if(t === "REDEEM") redeems.push(r);
+    else skipped++;
+  });
+
+  trades.sort(function(a,b){ return pmNum(a.timestamp) - pmNum(b.timestamp); });
+  trades.forEach(function(r){
+    var key = keyOf(r);
+    if(!key){ unmatched++; return; }
+    var size = pmNum(r.size);
+    var usd = pmNum(r.usdcSize) || size * pmNum(r.price);
+    if(size <= 0 && usd <= 0){ unmatched++; return; }
+    var g = grp(key, r);
+    var side = String(r.side || r.type || "BUY").toUpperCase();
+    if(side === "SELL"){ g.soldShares += size; g.proceeds += usd; }
+    else { g.shares += size; g.cost += usd; }
+    if(!g.first) g.first = pmDate(r.timestamp);
+  });
+
+  redeems.forEach(function(r){
+    var key = keyOf(r), g = key ? groups[key] : null;
+    if(!g && r.conditionId){
+      for(var i=0;i<order.length;i++){
+        var c = groups[order[i]];
+        if(c.cid === r.conditionId && (c.shares - c.soldShares - c.redeemShares) > 0.01){ g = c; break; }
+      }
+    }
+    if(!g){ unmatched++; return; }
+    var size = pmNum(r.size), usd = pmNum(r.usdcSize);
+    g.redeemShares += size || usd;
+    g.redeemed += usd || size;
+  });
+
+  /* positions with no trades behind them (history truncated, or bought before the window) */
+  Object.keys(posByKey).forEach(function(key){
+    if(groups[key]) return;
+    var pr = posByKey[key];
+    if(pr.size <= 0 || pr.avg <= 0) return;
+    var g = grp(key, pr.row);
+    g.src = "position";
+    g.shares = pr.size;
+    g.cost = pr.initial || pr.size * pr.avg;
+    g.first = iso(new Date());
+  });
+
+  var out = [];
+  order.forEach(function(k){
+    var g = groups[k];
+    if(g.shares <= 0 || g.cost <= 0) return;
+    var avg = g.cost / g.shares;
+    var mult = avg > 0 ? 1 / avg : 0;
+    if(!isFinite(mult) || mult <= 0) return;
+
+    var pr = posByKey[g.key];
+    var openNow = pr ? pr.size : 0;
+    var stillOpen = Math.max(0, g.shares - g.soldShares - g.redeemShares);
+    var returned = g.proceeds + g.redeemed;
+    var expired = 0;
+
+    if(g.src === "position"){
+      stillOpen = g.shares;
+    }
+    if(sawPositions){
+      var held = Math.min(stillOpen, openNow);
+      expired = stillOpen - held;          /* resolved worthless: gone from positions, never redeemed */
+      stillOpen = held;
+      dead += expired > 0.01 ? 1 : 0;
+    }
+    if(pr && pr.redeemable && stillOpen > 0.01){
+      /* resolved in your favour, not claimed yet - settled all the same, $1 a share */
+      returned += stillOpen;
+      stillOpen = 0;
+    }
+    var closedShares = Math.max(0, g.shares - stillOpen);
+
+    var label = g.title + (g.outcome ? " — " + g.outcome : "");
+    var base = PM_NOTE + " · " + pmShares(g.shares) + " shares @ " + (avg * 100).toFixed(1) + "¢";
+
+    if(closedShares > 0.01){
+      var costClosed = g.cost * (closedShares / g.shares);
+      var full = costClosed * mult;
+      var result, ret = null;
+      if(returned <= 0.005) result = "loss";
+      else if(Math.abs(returned - full) <= Math.max(0.02, full * 0.01)) result = "win";
+      else { result = "partial"; ret = round2(returned); }
+      var how = g.redeemShares > 0.01 ? " · redeemed"
+              : expired > 0.01 && returned <= 0.005 ? " · resolved against you"
+              : pr && pr.redeemable ? " · resolved, not claimed yet"
+              : " · sold before resolution";
+      out.push({srcKey:"pm:" + g.key + ":closed", date:g.first || iso(new Date()), desc:label,
+                stake:round2(costClosed), mult:mult, result:result, returned:ret, note:base + how});
+    }
+    if(stillOpen > 0.01){
+      var costOpen = g.cost * (stillOpen / g.shares);
+      out.push({srcKey:"pm:" + g.key + ":open", date:g.first || iso(new Date()), desc:label,
+                stake:round2(costOpen), mult:mult, result:"pending", returned:null,
+                note:base + " · still open"});
+    }
+  });
+
+  out.sort(function(a,b){ return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; });
+  return {bets:out, skipped:skipped, unmatched:unmatched, dead:dead, sawPositions:sawPositions,
+          nActivity:got.activity.length, nPositions:got.positions.length};
+}
+
+function pmStatus(msg, tone){
+  var el = document.getElementById("pm-status");
+  el.innerHTML = msg;
+  el.style.color = tone === "bad" ? "var(--bad)" : tone === "good" ? "var(--good)" : "var(--ink-3)";
+}
+function pmShowLinks(addr){
+  document.getElementById("pm-links").innerHTML = pmUrls(addr).map(function(l){
+    return '<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:7px 10px">' +
+      '<b style="font-size:11.5px; min-width:104px">' + l.k + '</b>' +
+      '<code style="flex:1 1 220px; font-family:\'IBM Plex Mono\', monospace; font-size:10.5px; color:var(--ink-2); overflow-wrap:anywhere">' + esc(l.u) + '</code>' +
+      '<a class="btn btn-sm" href="' + esc(l.u) + '" target="_blank" rel="noopener noreferrer">Open</a>' +
+      '<button class="btn btn-sm js-pmcopy" type="button" data-url="' + esc(l.u) + '">Copy link</button></div>';
+  }).join("");
+}
+function pmRenderPreview(res){
+  var box = document.getElementById("pm-preview");
+  if(!res.bets.length){
+    box.hidden = false;
+    box.innerHTML = '<div class="empty">Nothing to import from that JSON.' +
+      (res.nActivity + res.nPositions ? ' Read ' + res.nActivity + ' activity rows and ' + res.nPositions + ' positions, but none resolved to a bet.' : '') + '</div>';
+    pmStaged = null;
+    return;
+  }
+  var known = {};
+  state.bets.forEach(function(b){ if(b.srcKey) known[b.srcKey] = true; });
+  var nNew = 0, nUpd = 0, stake = 0, pnl = 0;
+  res.bets.forEach(function(b){
+    if(known[b.srcKey]) nUpd++; else nNew++;
+    stake += b.stake;
+    if(b.result !== "pending"){
+      var r = b.result === "win" ? b.stake * b.mult : b.result === "loss" ? 0 : b.result === "push" ? b.stake : (b.returned || 0);
+      pnl += r - b.stake;
+    }
+  });
+  var nStale = pmStale(res.bets).length;
+  var notes = [];
+  if(res.skipped) notes.push(res.skipped + " split/merge/reward row" + (res.skipped === 1 ? "" : "s") + " skipped \u2014 those don\u2019t map to a single bet");
+  if(res.unmatched) notes.push(res.unmatched + " row" + (res.unmatched === 1 ? "" : "s") + " couldn\u2019t be matched to a market");
+  if(res.dead) notes.push(res.dead + " market" + (res.dead === 1 ? "" : "s") + " booked as a loss \u2014 held in your trade history, gone from your positions, never redeemed");
+  if(!res.sawPositions) notes.push("no positions list, so anything unsold is marked pending \u2014 paste the positions response too and resolved losers get booked");
+  if(res.nActivity >= PM_MAX) notes.push("hit the " + PM_MAX + "-row history cap \u2014 older trades may be missing");
+
+  pmStaged = res.bets;
+  box.hidden = false;
+  box.innerHTML =
+    '<div class="sec-head"><h2>Ready to import</h2><span class="hint">' +
+      nNew + " new \u00b7 " + nUpd + " already imported (will be refreshed) \u00b7 " +
+      (nStale ? nStale + " stale row" + (nStale === 1 ? "" : "s") + " replaced \u00b7 " : "") +
+      money(stake, {round:true}) + " staked \u00b7 " +
+      '<b class="num ' + signClass(pnl) + '">' + money(pnl, {signed:true}) + "</b> settled P&L</span></div>" +
+    '<div class="tablewrap" style="max-height:330px; overflow-y:auto"><table style="min-width:640px"><thead><tr>' +
+      '<th>Date</th><th>Market</th><th class="r">Stake</th><th class="r">Price</th><th>Result</th><th class="r">P&L</th><th></th>' +
+    '</tr></thead><tbody>' + res.bets.map(function(b){
+      var r = b.result === "pending" ? null : b.result === "win" ? b.stake * b.mult : b.result === "loss" ? 0 : (b.returned || 0);
+      var pl = r === null ? null : r - b.stake;
+      return '<tr><td class="num" style="white-space:nowrap">' + fmtDate(b.date) + '</td>' +
+        '<td class="bet-desc"><div class="d">' + esc(b.desc) + '</div></td>' +
+        '<td class="r num">' + money(b.stake) + '</td>' +
+        '<td class="r num">' + b.mult.toFixed(2) + '\u00d7</td>' +
+        '<td><span class="chip ' + b.result + '">' + (RESULT_LABEL[b.result] || b.result) + '</span></td>' +
+        '<td class="r num ' + (pl === null ? "" : signClass(pl)) + '" style="font-weight:600">' +
+          (pl === null ? '<span style="color:var(--ink-3)">\u2013</span>' : money(pl, {signed:true})) + '</td>' +
+        '<td class="r"><span class="chip ' + (known[b.srcKey] ? "push" : "pending") + '">' + (known[b.srcKey] ? "Update" : "New") + '</span></td></tr>';
+    }).join("") + '</tbody></table></div>' +
+    (notes.length ? '<p class="help" style="margin-top:9px">' + notes.map(esc).join(" &middot; ") + '</p>' : "") +
+    '<div style="display:flex; gap:9px; margin-top:12px; flex-wrap:wrap">' +
+      '<button class="btn btn-sm btn-primary" type="button" id="pm-confirm">Import ' + res.bets.length + ' bet' + (res.bets.length === 1 ? "" : "s") + '</button>' +
+      '<button class="btn btn-sm" type="button" id="pm-cancel">Cancel</button></div>';
+}
+function pmMarketOf(srcKey){
+  return String(srcKey).replace(/:(closed|open)$/, "");
+}
+/* Rows this import no longer produces for a market it covers are stale - an earlier import
+   saw that market differently (say, open before it resolved). Drop them, or the same money
+   gets counted twice. */
+function pmStale(bets){
+  var incoming = {}, touched = {};
+  bets.forEach(function(b){ incoming[b.srcKey] = true; touched[pmMarketOf(b.srcKey)] = true; });
+  return state.bets.filter(function(b){
+    return b.srcKey && touched[pmMarketOf(b.srcKey)] && !incoming[b.srcKey];
+  });
+}
+function pmApply(bets){
+  var added = 0, updated = 0;
+  var stale = pmStale(bets);
+  if(stale.length){
+    state.bets = state.bets.filter(function(b){ return stale.indexOf(b) === -1; });
+  }
+  bets.forEach(function(nb){
+    var ex = null;
+    for(var i=0;i<state.bets.length;i++){ if(state.bets[i].srcKey === nb.srcKey){ ex = state.bets[i]; break; } }
+    if(ex){
+      ex.date = nb.date; ex.desc = nb.desc; ex.stake = nb.stake; ex.mult = nb.mult;
+      ex.result = nb.result; ex.returned = nb.returned;
+      if(!ex.note || ex.note.indexOf(PM_NOTE) === 0) ex.note = nb.note;
+      updated++;
+    }else{
+      state.bets.push({id:uid(), srcKey:nb.srcKey, date:nb.date, book:"polymarket", desc:nb.desc,
+        stake:nb.stake, mult:nb.mult, result:nb.result, returned:nb.returned,
+        unitSize:round2(currentUnitSize("polymarket")), note:nb.note});
+      added++;
+    }
+  });
+  state.isSample = false;
+  save();
+  return {added:added, updated:updated, removed:stale.length};
+}
+function pmGet(url, signal){
+  return fetch(url, {signal:signal, headers:{Accept:"application/json"}}).then(function(r){
+    if(!r.ok) throw new Error("Polymarket replied " + r.status);
+    return r.json();
+  });
+}
+function pmFetchAll(addr){
+  var ctl = new AbortController();
+  var timer = setTimeout(function(){ ctl.abort(); }, 25000);
+  var acts = [];
+  function page(off){
+    if(off >= PM_MAX) return Promise.resolve();
+    return pmGet(PM_BASE + "/activity?user=" + addr + "&limit=" + PM_PAGE + "&offset=" + off +
+                 "&sortBy=TIMESTAMP&sortDirection=DESC", ctl.signal).then(function(rows){
+      if(!Array.isArray(rows) || !rows.length) return;
+      acts = acts.concat(rows);
+      if(rows.length >= PM_PAGE) return page(off + PM_PAGE);
+    });
+  }
+  return page(0)
+    .then(function(){
+      return pmGet(PM_BASE + "/positions?user=" + addr + "&sizeThreshold=0.1&limit=" + PM_PAGE, ctl.signal)
+        .catch(function(){ return []; });
+    })
+    .then(function(pos){
+      clearTimeout(timer);
+      return {activity:acts, positions:Array.isArray(pos) ? pos : []};
+    }, function(e){ clearTimeout(timer); throw e; });
+}
+
+document.getElementById("pm-addr").addEventListener("change", function(){
+  state.pmWallet = this.value.trim();
+  save();
+  if(pmAddrValue()) pmShowLinks(pmAddrValue());
+});
+document.getElementById("pm-fetch").addEventListener("click", function(){
+  var addr = pmAddrValue();
+  if(!addr){ pmStatus("That doesn\u2019t look like a wallet address \u2014 it should be <b>0x</b> followed by 40 characters.", "bad"); return; }
+  var btn = this;
+  btn.disabled = true;
+  pmStatus("Asking Polymarket for your trade history\u2026");
+  pmFetchAll(addr).then(function(data){
+    btn.disabled = false;
+    if(!data.activity.length && !data.positions.length){
+      pmStatus("Polymarket answered, but that wallet has no trades or open positions.", "bad");
+      return;
+    }
+    pmStatus("Read " + data.activity.length + " activity rows and " + data.positions.length + " open positions.", "good");
+    pmRenderPreview(pmBuild(data, true));
+  }, function(err){
+    btn.disabled = false;
+    pmShowLinks(addr);
+    document.getElementById("pm-paste").hidden = false;
+    pmStatus("Couldn\u2019t reach Polymarket from this page (" + esc(err && err.message ? err.message : "blocked") +
+      "). That\u2019s expected on claude.ai, where the page is sandboxed. Use the paste route below \u2014 same result.", "bad");
+  });
+});
+document.getElementById("pm-manual").addEventListener("click", function(){
+  var addr = pmAddrValue();
+  if(!addr){ pmStatus("Enter your wallet address first and I\u2019ll build the two links for you.", "bad"); return; }
+  pmShowLinks(addr);
+  var box = document.getElementById("pm-paste");
+  box.hidden = false;
+  pmStatus("Open each link, copy the whole response, and paste it below.");
+  document.getElementById("pm-json").focus();
+});
+document.getElementById("pm-parse").addEventListener("click", function(){
+  var aTxt = document.getElementById("pm-json").value.trim();
+  var pTxt = document.getElementById("pm-json-pos").value.trim();
+  if(!aTxt && !pTxt){ pmStatus("Paste at least one of the two responses first.", "bad"); return; }
+  var payload = {}, bad = null;
+  if(aTxt){ try{ payload.activity = JSON.parse(aTxt); }catch(e){ bad = "trade history"; } }
+  if(pTxt && !bad){ try{ payload.positions = JSON.parse(pTxt); }catch(e){ bad = "open positions"; } }
+  if(bad){
+    pmStatus("The " + bad + " box isn\u2019t valid JSON \u2014 copy the whole response, first bracket to last.", "bad");
+    return;
+  }
+  var res = pmBuild(payload, !!pTxt);
+  pmStatus("Read " + res.nActivity + " activity rows and " + res.nPositions + " open positions." +
+    (pTxt ? "" : " Without the positions list, resolved losers stay marked pending."), pTxt ? "good" : "");
+  pmRenderPreview(res);
+});
+document.getElementById("pm-card").addEventListener("click", function(ev){
+  var copy = ev.target.closest(".js-pmcopy");
+  if(copy){
+    var url = copy.getAttribute("data-url");
+    if(navigator.clipboard){
+      navigator.clipboard.writeText(url).then(function(){ toast("Link copied"); }, function(){ toast("Select the link and copy it."); });
+    }else{ toast("Select the link and copy it."); }
+    return;
+  }
+  if(ev.target.id === "pm-cancel"){
+    document.getElementById("pm-preview").hidden = true;
+    pmStaged = null;
+    return;
+  }
+  if(ev.target.id === "pm-confirm"){
+    if(!pmStaged || !pmStaged.length) return;
+    var r = pmApply(pmStaged);
+    pmStaged = null;
+    document.getElementById("pm-preview").hidden = true;
+    document.getElementById("pm-json").value = "";
+    document.getElementById("pm-json-pos").value = "";
+    renderAll();
+    toast(r.added + " imported" + (r.updated ? ", " + r.updated + " refreshed" : "") +
+          (r.removed ? ", " + r.removed + " replaced" : ""));
+    selectTab("tab-dash");
+  }
+});
+
+/* =========================================================
    Boot
    ========================================================= */
 function renderAll(){
@@ -1355,6 +1822,10 @@ function renderAll(){
 function start(){
   state = load();
   renderAll();
+  if(state.pmWallet){
+    document.getElementById("pm-addr").value = state.pmWallet;
+    if(pmAddrValue()) pmShowLinks(pmAddrValue());
+  }
   var saved = null;
   try{ saved = localStorage.getItem(KEY + "/tab"); }catch(e){}
   if(saved && TABS.some(function(p){ return p[0] === saved; })) selectTab(saved);
