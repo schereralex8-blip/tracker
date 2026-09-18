@@ -305,6 +305,29 @@ input:focus, select:focus, textarea:focus{border-color:var(--accent); outline:no
 .move .m-l{display:flex; flex-direction:column}
 .move .m-d{font-size:11px; color:var(--ink-3)}
 
+/* screenshot logging */
+.drop{
+  border:1.5px dashed var(--line-2); border-radius:12px; background:var(--surface-2);
+  padding:26px 18px; text-align:center; transition:border-color .12s ease, background .12s ease;
+}
+.drop.over{border-color:var(--accent); background:var(--accent-soft)}
+.drop h4{margin:0 0 4px; font-size:14px; font-weight:600}
+.drop p{margin:0; font-size:12.5px; color:var(--ink-3)}
+.thumbs{display:flex; gap:9px; flex-wrap:wrap; margin-top:13px}
+.thumb{position:relative; width:84px; height:84px; border-radius:9px; overflow:hidden; border:1px solid var(--line-2); background:var(--surface-3)}
+.thumb img{width:100%; height:100%; object-fit:cover; display:block}
+.thumb button{
+  position:absolute; top:3px; right:3px; width:20px; height:20px; border-radius:50%;
+  border:0; background:rgba(12,15,17,.72); color:#fff; font-size:13px; line-height:1;
+  display:flex; align-items:center; justify-content:center; padding:0;
+}
+.spin{
+  display:inline-block; width:13px; height:13px; border:2px solid var(--line-2);
+  border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; vertical-align:-2px; margin-right:7px;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){.spin{animation-duration:2.4s}}
+
 /* toast */
 .toast{
   position:fixed; left:50%; transform:translateX(-50%); bottom:calc(20px + env(safe-area-inset-bottom, 0px)); z-index:80;
@@ -335,6 +358,7 @@ input:focus, select:focus, textarea:focus{border-color:var(--accent); outline:no
       <div class="bal"><span class="k"><i class="dot pm"></i>Polymarket</span><span class="v num" id="bal-pm">$0</span></div>
       <div class="bal"><span class="k"><i class="dot tot"></i>Combined</span><span class="v num" id="bal-total">$0</span></div>
     </div>
+    <button class="btn" id="btn-shot" hidden>From a screenshot</button>
     <button class="btn btn-primary" id="btn-log">Log a bet</button>
   </div>
 </header>
@@ -526,6 +550,33 @@ input:focus, select:focus, textarea:focus{border-color:var(--accent); outline:no
     </div>
   </section>
 </main>
+
+<!-- ============ SCREENSHOT READER ============ -->
+<div class="sheet-scrim" id="shot-scrim" hidden>
+  <div class="sheet" id="shot-sheet" role="dialog" aria-modal="true" aria-labelledby="shot-title" style="width:min(720px, 100%)">
+    <div class="sheet-head">
+      <h3 id="shot-title">Log from a screenshot</h3>
+      <button type="button" class="btn btn-ghost" id="shot-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="sheet-body">
+      <div class="drop" id="shot-drop">
+        <h4>Drop screenshots here</h4>
+        <p>Or <button type="button" class="btn btn-sm" id="shot-pick" style="margin:0 2px">choose files</button> &mdash; you can also just paste one with <b>Ctrl/Cmd + V</b>.</p>
+        <input type="file" id="shot-input" accept="image/*" multiple hidden>
+      </div>
+      <div class="thumbs" id="shot-thumbs"></div>
+      <p class="help" id="shot-status">Your bet slips from either app. Claude reads them on your own account, and nothing is saved until you check the numbers and confirm.</p>
+      <div id="shot-preview" hidden style="border-top:1px solid var(--line); padding-top:14px"></div>
+    </div>
+    <div class="sheet-foot">
+      <button type="button" class="btn btn-sm" id="shot-clear">Clear</button>
+      <div style="display:flex; gap:9px; margin-left:auto">
+        <button type="button" class="btn" id="shot-stop" hidden>Stop</button>
+        <button type="button" class="btn btn-primary" id="shot-read" disabled>Read them</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ============ BET FORM ============ -->
 <div class="sheet-scrim" id="sheet-scrim" hidden>
@@ -1518,7 +1569,11 @@ document.getElementById("btn-log").addEventListener("click", function(){ openShe
 document.getElementById("btn-cancel").addEventListener("click", closeSheet);
 document.getElementById("btn-close-sheet").addEventListener("click", closeSheet);
 scrim.addEventListener("mousedown", function(ev){ if(ev.target === scrim) closeSheet(); });
-document.addEventListener("keydown", function(ev){ if(ev.key === "Escape" && !scrim.hidden) closeSheet(); });
+document.addEventListener("keydown", function(ev){
+  if(ev.key !== "Escape") return;
+  if(!document.getElementById("shot-scrim").hidden){ closeShot(); return; }
+  if(!scrim.hidden) closeSheet();
+});
 
 document.addEventListener("click", function(ev){
   var edit = ev.target.closest(".js-edit");
@@ -1669,6 +1724,240 @@ window.addEventListener("resize", function(){
 });
 
 /* =========================================================
+   Screenshot reader
+
+   Claude reads the slip and fills in the form; nothing is written to the
+   ledger until the numbers have been looked at and confirmed. Needs the
+   `sample` capability, which only exists in the published page - opened as
+   a local file there is no Claude to ask, so the button stays hidden.
+   ========================================================= */
+var SHOT_NOTE = "Read from a screenshot";
+var sampler = null, shotLimits = null, shotFiles = [], shotCtl = null;
+
+var SHOT_PROMPT =
+  "These are screenshots of bets from two apps: PrizePicks (daily fantasy pick'em) and " +
+  "Polymarket (a prediction market). Read every bet you can see and reply with ONLY a JSON array, " +
+  "one object per bet. A screenshot showing a list of entries gives one object per entry.\n\n" +
+  "Each object:\n" +
+  '{"book":"prizepicks"|"polymarket","date":"YYYY-MM-DD"|null,"desc":string,"stake":number,' +
+  '"mult":number,"result":"pending"|"win"|"loss"|"push"|"partial","returned":number|null,' +
+  '"note":string,"confident":boolean}\n\n' +
+  "Rules:\n" +
+  "- stake: the money at risk in dollars. PrizePicks: the entry fee. Polymarket: shares x price paid.\n" +
+  "- mult: the TOTAL return multiple on a win, never the profit. PrizePicks prints it (3x, 6x, 25x) " +
+  "or shows a payout, in which case mult = payout / entry fee. Polymarket: mult = 1 / price per share, " +
+  "so 40 cents a share is 2.5.\n" +
+  "- result: \"pending\" while it is live, open or unsettled; \"win\" if it paid the full multiplier; " +
+  "\"loss\" if it lost; \"push\" if refunded, voided or cancelled; \"partial\" for a flex play that hit " +
+  "only some legs, or a Polymarket position sold before it resolved.\n" +
+  "- returned: only for \"partial\" - the dollars that came back, stake included. Otherwise null.\n" +
+  "- desc: short and specific. PrizePicks: the entry type and the picks, e.g. " +
+  "\"Power Play 2x - Mahomes 250+ yds / Kelce 5+ rec\". Polymarket: the market and the side, e.g. " +
+  "\"Fed cuts 25bps in September - Yes\".\n" +
+  "- date: the date the bet was placed if it is visible, otherwise null.\n" +
+  "- note: anything useful that does not fit the fields. Empty string if nothing.\n" +
+  "- confident: false if you had to guess at any number.\n" +
+  "- Plain numbers only: 25.5, never \"$25.50\".\n" +
+  "- Ignore an image with no bet in it. If none of them has one, reply with [].";
+
+function initShots(){
+  if(!window.claude || typeof window.claude.use !== "function") return;
+  Promise.resolve(window.claude.use("sample")).then(function(s){
+    if(!s) return null;
+    return s.limits().then(function(l){
+      if(!l || !l.images) return null;
+      sampler = s;
+      shotLimits = l.images;
+      var inp = document.getElementById("shot-input");
+      if(shotLimits.mediaTypes && shotLimits.mediaTypes.length) inp.accept = shotLimits.mediaTypes.join(",");
+      document.getElementById("btn-shot").hidden = false;
+      return null;
+    });
+  }).catch(function(){ /* absence is a normal state: the button just stays hidden */ });
+}
+function shotStatus(msg, tone){
+  var el = document.getElementById("shot-status");
+  el.innerHTML = msg;
+  el.style.color = tone === "bad" ? "var(--bad)" : tone === "good" ? "var(--good)" : "var(--ink-3)";
+}
+function shotRenderThumbs(){
+  var box = document.getElementById("shot-thumbs");
+  box.innerHTML = shotFiles.map(function(f, i){
+    return '<div class="thumb"><img alt="Screenshot ' + (i+1) + '" src="' + f.url + '">' +
+      '<button type="button" class="js-shot-del" data-i="' + i + '" aria-label="Remove screenshot ' + (i+1) + '">&times;</button></div>';
+  }).join("");
+  document.getElementById("shot-read").disabled = !shotFiles.length;
+  document.getElementById("shot-read").textContent = shotFiles.length > 1
+    ? "Read " + shotFiles.length + " screenshots" : "Read it";
+}
+function shotAdd(list){
+  var max = (shotLimits && shotLimits.maxCount) || 4;
+  var added = 0, skipped = 0;
+  Array.prototype.forEach.call(list, function(f){
+    if(!f || !/^image\//.test(f.type)){ skipped++; return; }
+    if(shotFiles.length >= max){ skipped++; return; }
+    shotFiles.push({file:f, url:URL.createObjectURL(f)});
+    added++;
+  });
+  shotRenderThumbs();
+  if(skipped) shotStatus(skipped + " file" + (skipped === 1 ? "" : "s") + " left out \u2014 images only, up to " + max + " at a time.", "bad");
+  else if(added) shotStatus(shotFiles.length + " screenshot" + (shotFiles.length === 1 ? "" : "s") + " ready. Press <b>Read " +
+    (shotFiles.length === 1 ? "it" : "them") + "</b> and check what comes back.");
+}
+function shotReset(){
+  shotFiles.forEach(function(f){ try{ URL.revokeObjectURL(f.url); }catch(e){} });
+  shotFiles = [];
+  shotRenderThumbs();
+  document.getElementById("shot-preview").hidden = true;
+  document.getElementById("shot-input").value = "";
+}
+function openShot(){
+  document.getElementById("shot-scrim").hidden = false;
+  document.body.style.overflow = "hidden";
+  shotStatus("Your bet slips from either app. Claude reads them on your own account, and nothing is saved until you check the numbers and confirm.");
+}
+function closeShot(){
+  if(shotCtl){ shotCtl.abort(); shotCtl = null; }
+  document.getElementById("shot-scrim").hidden = true;
+  document.body.style.overflow = "";
+  shotReset();
+}
+var SHOT_ERRORS = {
+  not_granted: "You turned down Claude access for this page, so screenshots can\u2019t be read here. Reload if you want to be asked again.",
+  sampling_disabled: "Claude isn\u2019t available on this account, so screenshots can\u2019t be read.",
+  images_unavailable: "This view can\u2019t send images to Claude. Open the tracker in the Claude app or on claude.ai.",
+  image_rejected: "Claude couldn\u2019t use one of those files. Try a smaller or more ordinary screenshot (PNG or JPEG).",
+  rate_limited: "Too many requests for now \u2014 give it a minute and try again.",
+  session_expired: "Your Claude session expired. Sign in again and retry.",
+  refused: "Claude declined to read those images.",
+  invalid_json: "Claude\u2019s answer didn\u2019t come back as readable data. Try again, or crop to one bet per screenshot.",
+  empty_completion: "Claude sent nothing back. Try a clearer or tighter crop.",
+  prompt_too_large: "That was too much at once \u2014 try fewer screenshots.",
+  cancelled: "Stopped."
+};
+/* Claude's JSON is untrusted input: every field is coerced and re-derived through the
+   same row logic the spreadsheet importer uses, rather than trusted as given. */
+function shotToBets(arr){
+  if(!Array.isArray(arr)) return {bets:[], notes:["Claude didn\u2019t send back a list of bets."], rows:0};
+  var bets = [], bad = [], unsure = 0, seen = {};
+  arr.forEach(function(o, i){
+    if(!o || typeof o !== "object"){ bad.push("entry " + (i+1) + ": not a bet"); return; }
+    var get = function(field){
+      switch(field){
+        case "date":   return o.date;
+        case "desc":   return o.desc || o.description || o.title || "";
+        case "stake":  return o.stake;
+        case "mult":   return o.mult !== undefined ? o.mult : o.multiplier;
+        case "ret":    return (o.returned === null || o.returned === undefined) ? "" : o.returned;
+        case "result": return o.result || o.status || "";
+        case "book":   return o.book || "";
+        case "note":   return o.note || "";
+        default:       return "";
+      }
+    };
+    var b = ppRowToBet(get, function(date, desc, stake){
+      var base = "ss:" + ppHash(date + "|" + String(desc).toLowerCase() + "|" + stake);
+      var key = base, n = 0;
+      while(seen[key]){ n++; key = base + ":" + n; }
+      seen[key] = true;
+      return key;
+    }, SHOT_NOTE);
+    if(b.bad){ bad.push("entry " + (i+1) + ": " + b.bad); return; }
+    if(!b.book) b.book = "prizepicks";
+    if(o.confident === false){ unsure++; b.note = b.note + " \u00b7 check this one"; }
+    bets.push(b);
+  });
+  var notes = [];
+  if(unsure) notes.push(unsure + (unsure === 1 ? " bet Claude wasn\u2019t sure about" : " bets Claude wasn\u2019t sure about") + " \u2014 marked in the note, worth checking before you import");
+  if(bad.length) notes.push(bad.length + " skipped \u2014 " + bad.slice(0,3).join("; "));
+  notes.push("Read from an image, so check the numbers against the slip \u2014 anything off is editable afterwards.");
+  return {bets:bets, notes:notes, rows:arr.length};
+}
+function shotRead(){
+  if(!sampler || !shotFiles.length) return;
+  var readBtn = document.getElementById("shot-read");
+  var stopBtn = document.getElementById("shot-stop");
+  document.getElementById("shot-preview").hidden = true;
+  readBtn.disabled = true;
+  stopBtn.hidden = false;
+  shotStatus('<span class="spin"></span>Reading ' + (shotFiles.length === 1 ? "the screenshot" : "the screenshots") +
+    "\u2026 this usually takes a few seconds. The first time, Claude asks your permission.");
+  shotCtl = new AbortController();
+  sampler.json(SHOT_PROMPT, {
+    images: shotFiles.map(function(f){ return f.file; }),
+    signal: shotCtl.signal,
+    modelTier: "default"
+  }).then(function(data){
+    shotCtl = null;
+    readBtn.disabled = false;
+    stopBtn.hidden = true;
+    var res = shotToBets(data);
+    if(!res.bets.length){
+      shotStatus("No bet could be read out of " + (shotFiles.length === 1 ? "that one." : "those.") +
+        " A tighter crop around the slip usually does it.", "bad");
+    }else{
+      shotStatus("Read " + res.bets.length + (res.bets.length === 1 ? " bet" : " bets") + ". Check them, then import.", "good");
+    }
+    res.emptyMsg = "Nothing in those images came back as a bet.";
+    impPreview({book:"prizepicks", boxId:"shot-preview", colLabel:"Bet"}, res);
+  }, function(err){
+    shotCtl = null;
+    readBtn.disabled = false;
+    stopBtn.hidden = true;
+    var code = (err && err.code) || "upstream_error";
+    shotStatus(SHOT_ERRORS[code] || "That didn\u2019t go through. Try again in a moment.", code === "cancelled" ? "" : "bad");
+  });
+}
+
+document.getElementById("btn-shot").addEventListener("click", openShot);
+document.getElementById("shot-close").addEventListener("click", closeShot);
+document.getElementById("shot-clear").addEventListener("click", function(){
+  shotReset();
+  shotStatus("Cleared. Drop or paste another screenshot.");
+});
+document.getElementById("shot-read").addEventListener("click", shotRead);
+document.getElementById("shot-stop").addEventListener("click", function(){
+  if(shotCtl){ shotCtl.abort(); shotCtl = null; }
+});
+document.getElementById("shot-pick").addEventListener("click", function(){
+  document.getElementById("shot-input").click();
+});
+document.getElementById("shot-input").addEventListener("change", function(){ shotAdd(this.files); });
+document.getElementById("shot-scrim").addEventListener("mousedown", function(ev){
+  if(ev.target === this) closeShot();
+});
+document.getElementById("shot-thumbs").addEventListener("click", function(ev){
+  var del = ev.target.closest(".js-shot-del");
+  if(!del) return;
+  var i = +del.getAttribute("data-i");
+  try{ URL.revokeObjectURL(shotFiles[i].url); }catch(e){}
+  shotFiles.splice(i, 1);
+  shotRenderThumbs();
+});
+(function(){
+  var drop = document.getElementById("shot-drop");
+  ["dragenter","dragover"].forEach(function(t){
+    drop.addEventListener(t, function(ev){ ev.preventDefault(); drop.classList.add("over"); });
+  });
+  ["dragleave","drop"].forEach(function(t){
+    drop.addEventListener(t, function(ev){ ev.preventDefault(); drop.classList.remove("over"); });
+  });
+  drop.addEventListener("drop", function(ev){
+    if(ev.dataTransfer && ev.dataTransfer.files) shotAdd(ev.dataTransfer.files);
+  });
+})();
+document.addEventListener("paste", function(ev){
+  if(document.getElementById("shot-scrim").hidden) return;
+  var items = ev.clipboardData && ev.clipboardData.items;
+  if(!items) return;
+  var files = [];
+  Array.prototype.forEach.call(items, function(it){
+    if(it.kind === "file"){ var f = it.getAsFile(); if(f) files.push(f); }
+  });
+  if(files.length){ ev.preventDefault(); shotAdd(files); }
+});
+
+/* =========================================================
    PrizePicks import
 
    PrizePicks has no public per-account API - entry history sits behind the
@@ -1780,7 +2069,7 @@ function ppHeaderMap(cells){
 }
 
 /* Turn one row of values into a bet, or into a reason it could not be one. */
-function ppRowToBet(get, seedKey){
+function ppRowToBet(get, seedKey, autoNote){
   var stake = ppNum(get("stake"));
   if(!(stake > 0)) return {bad:"no stake"};
   var desc = String(get("desc") || "").trim();
@@ -1820,9 +2109,9 @@ function ppRowToBet(get, seedKey){
   var book = bookCell.indexOf("poly") === 0 ? "polymarket" : bookCell ? "prizepicks" : null;
   var date = ppDateOf(get("date"));
   var note = String(get("note") || "").trim();
-  var auto = (book === "polymarket" ? PM_NOTE : PP_NOTE);
+  var auto = autoNote || (book === "polymarket" ? PM_NOTE : PP_NOTE);
   return {
-    srcKey: "pp:" + seedKey(date, desc, stake),
+    srcKey: seedKey(date, desc, stake),
     date: date, desc: desc, stake: round2(stake), mult: mult, result: result,
     returned: result === "partial" ? round2(returned) : null,
     note: note || (auto + (legs ? " \u00b7 " + legs + " picks" : "")),
@@ -1848,7 +2137,7 @@ function ppParseTable(text){
       return function(field){ return map[field] === undefined ? "" : (c[map[field]] || ""); };
     })(cells);
     var b = ppRowToBet(get, function(date, desc, stake){
-      var base = "t:" + ppHash(date + "|" + desc.toLowerCase() + "|" + stake);
+      var base = "pp:t:" + ppHash(date + "|" + desc.toLowerCase() + "|" + stake);
       var n = 0, key = base;
       while(seen[key]){ n++; key = base + ":" + n; }   /* same bet twice in one sheet stays two bets */
       seen[key] = true;
@@ -1907,7 +2196,7 @@ function ppParseJson(raw){
       }
     };
     var b = ppRowToBet(get, function(date, desc, stakeV){
-      var key = f.id ? "e:" + f.id : "j:" + ppHash(date + "|" + desc.toLowerCase() + "|" + stakeV + "|" + i);
+      var key = f.id ? "pp:e:" + f.id : "pp:j:" + ppHash(date + "|" + desc.toLowerCase() + "|" + stakeV + "|" + i);
       while(seen[key]){ key += "x"; }
       seen[key] = true;
       return key;
@@ -2296,6 +2585,7 @@ document.addEventListener("click", function(ev){
     ["pm-json","pm-json-pos","pp-text"].forEach(function(id){
       var el = document.getElementById(id); if(el) el.value = "";
     });
+    if(st.boxId === "shot-preview") closeShot();
     renderAll();
     toast(r.added + " imported" + (r.updated ? ", " + r.updated + " refreshed" : "") +
           (r.removed ? ", " + r.removed + " replaced" : ""));
@@ -2414,6 +2704,7 @@ function renderAll(){
 function start(){
   state = load();
   renderAll();
+  initShots();
   if(state.pmWallet){
     document.getElementById("pm-addr").value = state.pmWallet;
     if(pmAddrValue()) pmShowLinks(pmAddrValue());

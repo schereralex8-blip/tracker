@@ -61,6 +61,31 @@ Both take the total returned including stake, and P&L is the difference.
 - **Bankroll & data** — starting balances, unit sizing, deposits/withdrawals, and
   JSON backup / CSV export
 
+## Logging from a screenshot
+
+**From a screenshot**, in the top bar. Drop in bet slips from either app — drag
+them, pick them, or just paste one with Ctrl/Cmd+V straight from your clipboard —
+and Claude reads them into bets: book, date, description, stake, multiplier, result.
+Up to four at a time, and a screenshot showing a list of entries gives one bet per
+entry.
+
+Nothing is written to the ledger until you have seen the numbers. The extraction
+lands in the same preview every other import uses, with the count, the stake and the
+settled P&L, and an entry Claude wasn't sure about is flagged in its note. Anything
+it got wrong is editable afterwards like any hand-logged bet — and worth checking
+against the slip, because it is reading pixels.
+
+Claude's answer is treated as untrusted input: every field is coerced and re-derived
+through the same rules the spreadsheet importer uses, so a missing multiplier is
+worked out from the payout, a garbled row is skipped with a reason rather than
+imported wrong, and nothing malformed reaches your ledger.
+
+**This needs the published page**, because it asks Claude on your own account —
+opened as a local file there is no Claude to ask, so the button stays hidden rather
+than sitting there dead. The first read asks your permission, and the calls come out
+of your own Claude usage. Screenshots are sent for reading only; they aren't stored
+in the tracker.
+
 ## Importing from PrizePicks
 
 **Bankroll & data → Import from PrizePicks.** PrizePicks keeps entry history behind
