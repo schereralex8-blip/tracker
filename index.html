@@ -358,7 +358,7 @@ input:focus, select:focus, textarea:focus{border-color:var(--accent); outline:no
       <div class="bal"><span class="k"><i class="dot pm"></i>Polymarket</span><span class="v num" id="bal-pm">$0</span></div>
       <div class="bal"><span class="k"><i class="dot tot"></i>Combined</span><span class="v num" id="bal-total">$0</span></div>
     </div>
-    <button class="btn" id="btn-shot" hidden>From a screenshot</button>
+    <button class="btn" id="btn-shot">From a screenshot</button>
     <button class="btn btn-primary" id="btn-log">Log a bet</button>
   </div>
 </header>
@@ -559,6 +559,7 @@ input:focus, select:focus, textarea:focus{border-color:var(--accent); outline:no
       <button type="button" class="btn btn-ghost" id="shot-close" aria-label="Close">&times;</button>
     </div>
     <div class="sheet-body">
+      <div id="shot-unavail" hidden></div>
       <div class="drop" id="shot-drop">
         <h4>Drop screenshots here</h4>
         <p>Or <button type="button" class="btn btn-sm" id="shot-pick" style="margin:0 2px">choose files</button> &mdash; you can also just paste one with <b>Ctrl/Cmd + V</b>.</p>
@@ -568,7 +569,7 @@ input:focus, select:focus, textarea:focus{border-color:var(--accent); outline:no
       <p class="help" id="shot-status">Your bet slips from either app. Claude reads them on your own account, and nothing is saved until you check the numbers and confirm.</p>
       <div id="shot-preview" hidden style="border-top:1px solid var(--line); padding-top:14px"></div>
     </div>
-    <div class="sheet-foot">
+    <div class="sheet-foot" id="shot-foot">
       <button type="button" class="btn btn-sm" id="shot-clear">Clear</button>
       <div style="display:flex; gap:9px; margin-left:auto">
         <button type="button" class="btn" id="shot-stop" hidden>Stop</button>
@@ -1760,20 +1761,52 @@ var SHOT_PROMPT =
   "- Plain numbers only: 25.5, never \"$25.50\".\n" +
   "- Ignore an image with no bet in it. If none of them has one, reply with [].";
 
+var shotProbe = {runtime:false, sampling:false, images:false};
 function initShots(){
   if(!window.claude || typeof window.claude.use !== "function") return;
+  shotProbe.runtime = true;
   Promise.resolve(window.claude.use("sample")).then(function(s){
     if(!s) return null;
+    sampler = s;
+    shotProbe.sampling = true;
     return s.limits().then(function(l){
-      if(!l || !l.images) return null;
-      sampler = s;
-      shotLimits = l.images;
-      var inp = document.getElementById("shot-input");
-      if(shotLimits.mediaTypes && shotLimits.mediaTypes.length) inp.accept = shotLimits.mediaTypes.join(",");
-      document.getElementById("btn-shot").hidden = false;
+      if(l && l.images){
+        shotProbe.images = true;
+        shotLimits = l.images;
+        var inp = document.getElementById("shot-input");
+        if(shotLimits.mediaTypes && shotLimits.mediaTypes.length) inp.accept = shotLimits.mediaTypes.join(",");
+      }
       return null;
-    });
-  }).catch(function(){ /* absence is a normal state: the button just stays hidden */ });
+    }, function(){ return null; });
+  }).catch(function(){ /* absence is a normal state; the sheet explains it */ });
+}
+function shotWhy(){
+  var yn = function(v){ return v ? "yes" : "no"; };
+  var line = '<p class="help" style="margin:12px 0 0">Where it stands in this view: Claude runtime <b>' +
+    yn(shotProbe.runtime) + '</b> &middot; sampling <b>' + yn(shotProbe.sampling) +
+    '</b> &middot; images <b>' + yn(shotProbe.images) + '</b>.</p>';
+  var head, body;
+  if(!shotProbe.runtime){
+    head = "This copy of the tracker can\u2019t reach Claude.";
+    body = "Reading a screenshot means asking Claude, which only works when the tracker is open inside Claude \u2014 " +
+           "from the Claude app, or from claude.ai in a browser. A local copy of the file, or one added to your home " +
+           "screen, runs on its own with no Claude to ask.";
+  }else if(!shotProbe.sampling){
+    head = "Claude isn\u2019t available to this page here.";
+    body = "The tracker is running inside Claude, but this view won\u2019t let the page ask it anything. Opening the " +
+           "tracker from claude.ai on a computer is the most reliable place for this.";
+  }else{
+    head = "This view can\u2019t send images to Claude.";
+    body = "Claude is reachable, but images aren\u2019t available here \u2014 often the case on mobile. You can still " +
+           "try it; if it fails you\u2019ll get the exact reason. Otherwise open the tracker on a computer.";
+  }
+  return '<div style="background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:14px 16px">' +
+    '<h4 style="margin:0 0 6px; font-size:14px; font-weight:600">' + head + '</h4>' +
+    '<p class="help" style="margin:0">' + body + '</p>' + line +
+    '<div style="display:flex; gap:9px; margin-top:13px; flex-wrap:wrap">' +
+      (shotProbe.sampling ? '<button type="button" class="btn btn-sm" id="shot-anyway">Let me try anyway</button>' : "") +
+      '<button type="button" class="btn btn-sm btn-primary" id="shot-manual">Log it by hand instead</button>' +
+    '</div></div>';
 }
 function shotStatus(msg, tone){
   var el = document.getElementById("shot-status");
@@ -1811,11 +1844,23 @@ function shotReset(){
   document.getElementById("shot-preview").hidden = true;
   document.getElementById("shot-input").value = "";
 }
-function openShot(){
+function openShot(force){
+  var ready = !!sampler && (shotProbe.images || force);
   document.getElementById("shot-scrim").hidden = false;
   document.body.style.overflow = "hidden";
-  shotStatus("Your bet slips from either app. Claude reads them on your own account, and nothing is saved until you check the numbers and confirm.");
+  var un = document.getElementById("shot-unavail");
+  un.hidden = ready;
+  if(!ready) un.innerHTML = shotWhy();
+  document.getElementById("shot-drop").hidden = !ready;
+  document.getElementById("shot-thumbs").hidden = !ready;
+  document.getElementById("shot-status").hidden = !ready;
+  document.getElementById("shot-foot").hidden = !ready;
+  if(ready) shotStatus("Your bet slips from either app. Claude reads them on your own account, and nothing is saved until you check the numbers and confirm.");
 }
+document.addEventListener("click", function(ev){
+  if(ev.target.id === "shot-anyway"){ openShot(true); return; }
+  if(ev.target.id === "shot-manual"){ closeShot(); openSheet(null); }
+});
 function closeShot(){
   if(shotCtl){ shotCtl.abort(); shotCtl = null; }
   document.getElementById("shot-scrim").hidden = true;
@@ -1909,7 +1954,7 @@ function shotRead(){
   });
 }
 
-document.getElementById("btn-shot").addEventListener("click", openShot);
+document.getElementById("btn-shot").addEventListener("click", function(){ openShot(false); });
 document.getElementById("shot-close").addEventListener("click", closeShot);
 document.getElementById("shot-clear").addEventListener("click", function(){
   shotReset();
